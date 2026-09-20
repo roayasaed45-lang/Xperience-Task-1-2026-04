@@ -1,33 +1,89 @@
 package com.xperience.hero.event;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Optional;
 
 /**
- * Minimum service responsibility for this slice: retrieve an Event.
+ * Event business logic.
  *
- * Event creation is deliberately NOT implemented here. Creating an Event
- * requires recording its host (DESIGN.md I8), but host authentication/identity
- * (DESIGN.md Q3) is unresolved, and no minimal representation can be added to
- * Event without implicitly choosing an identity model. Implementing
- * create-event now would either produce a hostless Event (violating I8) or
- * silently invent an identity representation — both are avoided here.
+ * Implements event creation (with host management token generation,
+ * DESIGN.md Q3 — "Resolved Decisions") and the read/verification support
+ * later host-only operations will need.
  *
- * Also deliberately NOT implemented: close, cancel, editing, capacity/waitlist
- * logic, invitations, RSVP, dashboard, and any authorization enforcement
- * (Q2/Q3 unresolved).
+ * Deliberately NOT implemented here: invitations, RSVP, capacity/waitlist,
+ * dashboard, close/cancel, editing, or any invitee identity handling
+ * (Q2 unresolved).
  */
 @Service
 public class EventService {
 
     private final EventRepository eventRepository;
+    private final HostTokenService hostTokenService;
 
-    public EventService(EventRepository eventRepository) {
+    public EventService(EventRepository eventRepository, HostTokenService hostTokenService) {
         this.eventRepository = eventRepository;
+        this.hostTokenService = hostTokenService;
+    }
+
+    /**
+     * Creates an Event and generates its host management token in one
+     * transactional operation (DESIGN.md I8 / Section 10 Transaction
+     * Boundaries item 3). Status, host token, and host token hash are
+     * always server-determined and never accepted from the request.
+     */
+    @Transactional
+    public EventCreationResult createEvent(CreateEventRequest request) {
+        validate(request);
+
+        String rawToken = hostTokenService.generateRawToken();
+        String tokenHash = hostTokenService.hashToken(rawToken);
+
+        Event event = Event.builder()
+                .title(request.title())
+                .description(request.description())
+                .eventDateTime(request.eventDateTime())
+                .location(request.location())
+                .maxCapacity(request.maxCapacity())
+                .status(EventStatus.OPEN)
+                .hostTokenHash(tokenHash)
+                .build();
+
+        Event saved = eventRepository.save(event);
+
+        return new EventCreationResult(saved, rawToken);
     }
 
     public Optional<Event> getEventById(Long id) {
         return eventRepository.findById(id);
+    }
+
+    /**
+     * Verifies a caller-supplied raw host management token against the
+     * stored hash for the given event. Foundation for later host-only
+     * operations (invite, dashboard, close, cancel) — none of those
+     * operations are implemented yet, and this is not exposed as a public
+     * endpoint (DESIGN.md Section 9).
+     */
+    public boolean verifyHostToken(Long eventId, String rawToken) {
+        return eventRepository.findById(eventId)
+                .map(event -> hostTokenService.verify(rawToken, event.getHostTokenHash()))
+                .orElse(false);
+    }
+
+    private void validate(CreateEventRequest request) {
+        if (request.title() == null || request.title().isBlank()) {
+            throw new IllegalArgumentException("Event title is required");
+        }
+        if (request.eventDateTime() == null) {
+            throw new IllegalArgumentException("Event date/time is required");
+        }
+        if (request.location() == null || request.location().isBlank()) {
+            throw new IllegalArgumentException("Event location is required");
+        }
+        if (request.maxCapacity() != null && request.maxCapacity() < 0) {
+            throw new IllegalArgumentException("Event max capacity must not be negative");
+        }
     }
 }

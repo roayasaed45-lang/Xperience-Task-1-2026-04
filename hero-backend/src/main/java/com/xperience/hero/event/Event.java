@@ -1,5 +1,6 @@
 package com.xperience.hero.event;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -24,11 +25,10 @@ import java.time.LocalDateTime;
  * "start reached" / lock-after-start is intentionally NOT stored here — it remains
  * derived from eventDateTime versus current time (DESIGN.md I2, Section 8).
  *
- * Host ownership (DESIGN.md I8) is INTENTIONALLY NOT represented on this entity.
- * Host authentication/identity (DESIGN.md Q3) is unresolved, and no minimal
- * representation can be added without implicitly choosing an identity model.
- * I8 therefore cannot yet be fully satisfied — see EventService for the
- * corresponding deferral of event creation.
+ * Host ownership (DESIGN.md I8) is represented via hostTokenHash below —
+ * DESIGN.md Q3 is resolved as the "Host Management Token" decision: the
+ * backend generates a random token at creation and stores only its SHA-256
+ * hash here. No User entity, username, email, password, or JWT is used.
  *
  * eventDateTime is stored as LocalDateTime, which carries no timezone
  * information at all. This does not resolve DESIGN.md Q12 (timezone rules) —
@@ -66,4 +66,19 @@ public class Event {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private EventStatus status;
+
+    /**
+     * SHA-256 hash of the backend-generated host management token
+     * (DESIGN.md Q3 — Host Management Token). This is the first-pass host
+     * ownership credential for this event.
+     *
+     * The raw token is NEVER stored here and NEVER logged; only this
+     * one-way hash is persisted. This field must never be exposed directly
+     * in any API response — CreateEventResponse deliberately omits it, and
+     * @JsonIgnore below is a defense-in-depth backstop in case this entity
+     * is ever serialized directly instead of through a DTO.
+     */
+    @JsonIgnore
+    @Column(name = "host_token_hash", nullable = false)
+    private String hostTokenHash;
 }

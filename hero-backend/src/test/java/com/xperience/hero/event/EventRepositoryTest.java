@@ -14,12 +14,13 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Tests only the persistence foundation implemented in this slice: entity
- * structure, repository round-trips, and lifecycle status representation.
+ * Tests the persistence foundation at the entity/repository level: structure,
+ * round-trips, and lifecycle status representation. Host management token
+ * generation/verification is tested separately in EventServiceTest.
  *
- * Deliberately does NOT test: host ownership (Q3 unresolved, not represented
- * on the entity), any HTTP endpoint (none exists), or any feature not yet
- * implemented (creation workflow, capacity, waitlist, invitations, RSVP).
+ * Deliberately does NOT test any HTTP endpoint (covered in
+ * EventControllerTest) or any feature not yet implemented (capacity,
+ * waitlist, invitations, RSVP).
  */
 @SpringBootTest
 @Transactional
@@ -34,7 +35,8 @@ class EventRepositoryTest {
                 .description("Quarterly planning session")
                 .eventDateTime(LocalDateTime.now().plusDays(7))
                 .location("Main Office")
-                .status(EventStatus.OPEN);
+                .status(EventStatus.OPEN)
+                .hostTokenHash("test-hash-placeholder");
     }
 
     @Test
