@@ -93,6 +93,16 @@ All ten behavioral facts from the README (event creation fields, host assignment
 - The host management token is a **distinct concept** from the invitee's unique invitation token (I7): the host token authorizes management of an entire event; an invitation token scopes exactly one invitee's RSVP access to that event. The two must never be confused or interchangeable.
 - **Not addressed by this decision** (open limitations of this first-pass model): token recovery if lost, token rotation/expiry, and whether an event may have more than one host holding a valid token (Q4, still separately unresolved).
 
+**Attendance Outcome ownership: belongs to the Invitation**
+
+- **Invitation → RSVP Response concept → Attendance Outcome concept.** Both RSVP Response and Attendance Outcome are scoped to, and persisted in association with, exactly one Invitation.
+- **RSVP Response and Attendance Outcome are sibling state concepts under the same Invitation — not parent/child concepts.** Attendance Outcome is not owned by, attached to, or keyed off any specific RsvpResponse row; it does not reference RsvpResponse at all.
+- Rationale: RSVP Response represents the invitee's stated choice (Yes/No/Maybe). Attendance Outcome represents the system-derived current attendance state for that invitee (Confirmed/Waitlisted/None). The Outcome is derived from the current Response plus capacity state, but that derivation is a computation relationship, not a storage/ownership relationship — Attendance Outcome is not conceptually attached to one specific RsvpResponse row.
+- This keeps RSVP intent and system attendance state structurally separate (I6), while both remain anchored to the same Invitation as their common owner.
+- If RSVP history/change behavior is later implemented (i.e., if RsvpResponse gains multiple rows over time per Invitation), the current Attendance Outcome still belongs to the Invitation directly and can change independently as capacity/promotion decisions occur — it does not need to "follow" any particular historical Response row.
+- **Not decided by this resolution:** whether Attendance Outcome is enforced as exactly one row per Invitation at the schema level, and how updates/history are represented there. That remains an implementation-time schema question, addressed only if and when it is strictly required by this conceptual relationship — see Section 8.
+- **Not resolved by this decision:** Q1 (does Maybe count toward capacity), Q2 (invitee identity), Q7 (waitlist ordering), Q13 (promotion trigger scope), or RSVP history/update-in-place behavior. None of these are touched here.
+
 ### Open Questions
 
 | ID | Question | Why it matters |
@@ -166,7 +176,7 @@ No new human actor is introduced by this table — "System" denotes automatic ba
 
 | Name | Statement | Break Scenario | Trigger | Workflows Affected | Protection Note | Source |
 |---|---|---|---|---|---|---|
-| I6 RSVP Value | Response must be exactly Yes/No/Maybe, distinct from Attendance Outcome | Value outside the set, or Response/Outcome conflated | Unrestricted input, or missing separation | RSVP submission/change, Capacity Evaluation | Input constraint + conceptual separation | Fact |
+| I6 RSVP Value | Response must be exactly Yes/No/Maybe, distinct from Attendance Outcome | Value outside the set, or Response/Outcome conflated | Unrestricted input, or missing separation | RSVP submission/change, Capacity Evaluation | Input constraint + conceptual separation; both concepts are sibling state scoped to the same Invitation, not parent/child (Resolved Decision — Section 4) | Fact + Resolved Decision (Attendance Outcome ownership — Section 4) |
 | I7 Invitation Scope | A link must correspond to exactly the correct invitation/event | Link resolves to wrong invitee/event | Weak binding | Invitation, RSVP submission/change, invalid link | Not specified — mechanism unresolved | Fact + Open Questions (Q8, Q9) |
 | I8 Host/Event Ownership | Every event has its creator recorded as host | Event with no/incorrect host, or an event with no host management token | Creation path skips assignment or token generation | Event creation | Host assignment and host management token generation occur in the same transaction as event creation | Fact + Resolved Decision (Host Management Token — Section 4) |
 
@@ -232,6 +242,16 @@ No background/scheduled infrastructure is introduced by this clarification — L
 
 ## 8. Data Ownership and State Model
 
+### Invitation, RSVP Response, and Attendance Outcome Relationship (Resolved)
+
+```
+Invitation
+  → RSVP Response concept    (invitee's stated choice: YES / NO / MAYBE)
+  → Attendance Outcome concept (system-derived current state: CONFIRMED / WAITLISTED / NONE)
+```
+
+RSVP Response and Attendance Outcome are **sibling state concepts scoped to the same Invitation — not parent/child concepts**. Attendance Outcome belongs to the Invitation directly; it is not owned by, attached to, or keyed off any specific RsvpResponse row, even though its *value* is computed from the current Response plus capacity state. There is one current Attendance Outcome concept per Invitation. Whether this is enforced as exactly one database row per Invitation, and how updates/history are represented at the schema level, is **not decided here** — that remains an implementation-time question, addressed only if strictly required by this relationship (see the Attendance Outcome row below).
+
 | Concept | Source of Truth | Mutated By | Read By | Derived State | Lifecycle Note |
 |---|---|---|---|---|---|
 | Event core details | PostgreSQL | Business Logic | Frontend, Business Logic | None | **Initially written at creation; post-creation mutation remains unresolved** (see Section 4/15) |
@@ -239,8 +259,8 @@ No background/scheduled infrastructure is introduced by this clarification — L
 | Host management token | PostgreSQL | Business Logic, generated exactly once at event creation — never client-supplied, never regenerated in this first-pass model | Business Logic, to authorize host-only operations (I9) | None — a stored, backend-generated random value | Created in the same transaction as the event and host assignment (I8); distinct from the invitee's invitation token (I7) — the host token authorizes managing the whole event, the invitation token scopes one invitee's RSVP; recovery/rotation if lost is out of scope for this first-pass model (Q3) |
 | Event lifecycle/status | PostgreSQL | Business Logic, via Close/Cancel | Business Logic, Frontend | "Start reached" is derived from stored start time, not stored | Open→Closed/Cancelled known; reverse transitions unresolved (Q6, Q11) |
 | Invitation | PostgreSQL | Business Logic, on invite | Business Logic, Delivery Boundary | None | Duplicate policy (Q8) and expiry (Q9) unresolved |
-| RSVP Response (Yes/No/Maybe) | PostgreSQL | Business Logic, only on invitee request, subject to I2/I4/I5 | Business Logic, invitee's own view, host dashboard | None | See RSVP Lifecycle below |
-| Attendance Outcome (Confirmed/Waitlisted/None) | PostgreSQL | Business Logic only (never invitee/frontend) | Business Logic, invitee's own view, host dashboard | Derived from Response + capacity state, then persisted | None→Confirmed/Waitlisted; Waitlisted→Confirmed on promotion |
+| RSVP Response (Yes/No/Maybe) | PostgreSQL | Business Logic, only on invitee request, subject to I2/I4/I5 | Business Logic, invitee's own view, host dashboard | None | Belongs to exactly one Invitation; sibling to Attendance Outcome, not its parent (see relationship note above). See RSVP Lifecycle below |
+| Attendance Outcome (Confirmed/Waitlisted/None) | PostgreSQL | Business Logic only (never invitee/frontend) | Business Logic, invitee's own view, host dashboard | Derived from Response + capacity state, then persisted | Belongs to exactly one Invitation (Resolved Decision — Section 4); sibling to RSVP Response, not owned by or keyed off any specific RsvpResponse row. None→Confirmed/Waitlisted; Waitlisted→Confirmed on promotion. Whether one-row-per-Invitation is DB-enforced, and how history/updates are represented, is not decided |
 | Waitlist ordering | Likely derivable from entry order (FIFO working assumption, A6 — unresolved, Q7) | Business Logic, on promotion | Business Logic | Likely derived, not separately stored | Ordering policy unresolved (Q7) |
 | Confirmed attendance count | Derived (not stored) | N/A | Business Logic (I1) | Derived from Attendance Outcome | Avoids a duplicate source of truth for I1 |
 | Dashboard counts | Derived (not stored) | N/A | Host | Derived from Response + Attendance Outcome | Subject to display staleness only — never feeds capacity decisions |
@@ -251,7 +271,7 @@ No background/scheduled infrastructure is introduced by this clarification — L
 Created → Open (default) → Closed or Cancelled (host actions, stored). "Start reached" is a derived time condition, not a stored flag. Unresolved: reopening (Q6), Cancel-vs-Close distinction (Q11), whether Close also blocks changes to existing RSVPs (Q14), whether event details may be edited after creation.
 
 ### RSVP Lifecycle
-**Response** {Yes, No, Maybe} and **Attendance Outcome** {Confirmed, Waitlisted, None} are kept strictly separate and must remain separate throughout this document.
+**Response** {Yes, No, Maybe} and **Attendance Outcome** {Confirmed, Waitlisted, None} are kept strictly separate and must remain separate throughout this document. Both are sibling concepts scoped to the same Invitation (see relationship note above) — Attendance Outcome is not a child of RSVP Response.
 
 **Response changes are allowed before the event start time while the event remains open. Behavior while responses are closed is governed by I4 and Q14; behavior while the event is cancelled remains unresolved under Q11.** This is intentionally conditional, not an unconditional freedom to change RSVPs at any time.
 
@@ -309,7 +329,7 @@ No full authentication framework (e.g., Spring Security), session mechanism, Use
 **Current choice:** a per-event pessimistic/serialized correctness boundary around the capacity decision. **This simplifies correctness reasoning only when every capacity-changing path uses the same protected boundary — locking alone does not automatically guarantee correctness if any path bypasses it.** Optimistic version-based concurrency remains a reasonable later alternative if contention becomes a measured concern; it is not chosen now, for simplicity and explainability.
 
 ### Transaction Boundaries
-Five causally-linked write groups must succeed/fail together: (1) Response + capacity decision + Outcome, (2) Confirmed→No + promotion, (3) Event creation + host assignment + host management token generation (I8 — the token is generated in the same transaction as the event and its host assignment, never after the fact), (4) Invitation creation + token relationship, (5) Close/Cancel state check-then-write.
+Five causally-linked write groups must succeed/fail together: (1) Response + capacity decision + Outcome — both Response and Outcome are written for the same Invitation, as sibling state, not as a write to a shared row, (2) Confirmed→No + promotion, (3) Event creation + host assignment + host management token generation (I8 — the token is generated in the same transaction as the event and its host assignment, never after the fact), (4) Invitation creation + token relationship, (5) Close/Cancel state check-then-write.
 
 ### Correctness Guarantees
 1. Confirmed attendance never exceeds max-capacity (depends on Q1 for full correctness).
@@ -381,6 +401,7 @@ None of the unresolved product questions above (Q1, Q4, Q6–Q9, Q11–Q14) are 
 |---|---|---|
 | Capacity concurrency strategy | **Chosen** | Per-event pessimistic/serialized control, over optimistic version-based or database-atomic alternatives, for simplicity and explainability |
 | RSVP state model | **Chosen** | Separate Response and Attendance Outcome, over a combined enum, to keep intent and system decision distinct |
+| **Attendance Outcome ownership** | **Chosen** | Belongs to the Invitation, as a sibling state concept to RSVP Response — not owned by or keyed off any specific RsvpResponse row, over the alternative of attaching Outcome to RsvpResponse itself. Chosen because Outcome must be able to change independently of RSVP history (e.g., via promotion) without needing to "follow" a particular historical Response row. Whether this is enforced as one database row per Invitation, and how updates/history are represented, is **not decided** |
 | Confirmed/dashboard counts | **Chosen** | Derived from authoritative state, over stored running counters, to avoid a duplicate source of truth |
 | Event-start lock | **Chosen** | Derived from stored start time vs. current time, over a persisted flag, to avoid inventing background infrastructure |
 | Invitation/RSVP data shape | **Deferred / first-pass** | Leaning toward separate Invitation and RSVP concepts, matching the natural lifecycle; not fully re-examined at a schema level |
@@ -410,7 +431,7 @@ A new feature with no prior RSVP system. Backend has almost no RSVP implementati
 
 ### Implementation Rollout Order
 A safe incremental order, following design dependencies:
-1. **Core domain/state** — the minimum persistent concepts: Event, Invitation, RSVP Response, Attendance Outcome.
+1. **Core domain/state** — the minimum persistent concepts: Event, Invitation, RSVP Response, Attendance Outcome (Attendance Outcome's ownership relationship — belongs to the Invitation, sibling to RSVP Response — is resolved; see Section 4/8).
 2. **Core workflows** — event creation, invitation creation, RSVP submission/change, host dashboard.
 3. **Correctness controls** — capacity, waitlist, promotion, lock-after-start, close/cancel rules.
 4. **Identity/security** — host-side authorization can now be implemented via the Host Management Token (Q3, resolved); invitee-side identity remains blocked pending Q2.
@@ -462,3 +483,5 @@ Before considering the feature complete, verify: host authorization (I9), invite
 Each question above appears exactly once in this table and is not contradicted by any other section of this document.
 
 **Q3 (host authentication/identity) has been resolved** via the Host Management Token decision (see Section 4, "Resolved Decisions") and is intentionally no longer listed here. It is removed from this table rather than marked "resolved" in place, so that this table continues to represent only genuinely open questions.
+
+**The Attendance Outcome ownership relationship (Invitation vs. RsvpResponse) has been resolved**: Attendance Outcome belongs to the Invitation, as a sibling state concept to RSVP Response (see Section 4, "Resolved Decisions," and Section 8). This question surfaced during implementation and was never listed as a numbered Q item, so no row is removed here — it is noted for traceability only. Q1, Q2, Q7, Q13, and RSVP history/update-in-place behavior remain untouched by this resolution and are still listed above.
