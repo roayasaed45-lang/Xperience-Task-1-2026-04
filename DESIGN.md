@@ -68,7 +68,6 @@ All ten behavioral facts from the README (event creation fields, host assignment
 
 | ID | Assumption | Why needed | If false |
 |---|---|---|---|
-| A1 | Host is some identifiable entity with authorization rights over their event | Needed to reason about who may cancel/close | No basis for authorization checks |
 | A2 | Only "Yes" counts toward max-capacity, not "Maybe" | Needed to define "reached" | Capacity/waitlist logic changes (Q1) |
 | A3 | Unique link is the sole invitee identity mechanism | Needed to scope invitee workflows | Entire invitee trust model changes (Q2) |
 | A4 | Each event has exactly one host | Needed for ownership model | Ownership/authorization model changes (Q4) |
@@ -79,13 +78,27 @@ All ten behavioral facts from the README (event creation fields, host assignment
 
 **Note on A3 and A6:** both remain working assumptions only, not settled decisions. A3 is used only to let invitee workflows proceed; the final invitee identity model is unresolved (Q2). A6 is used only to let promotion logic proceed; the final waitlist ordering policy is unresolved (Q7).
 
+**Note on former A1:** the working assumption "Host is some identifiable entity with authorization rights over their event" has been **superseded** by the resolved decision below (Q3) and is no longer a separate open assumption.
+
+### Resolved Decisions
+
+**Q3 — Host authentication/identity: Host Management Token**
+
+- The event creator becomes the host (unchanged from the original brief).
+- When an Event is created, the backend generates a cryptographically random, unguessable **host management token**, stored alongside the event.
+- This token is the sole mechanism identifying/authorizing the host for that event: any request attempting a host-only operation (invite, dashboard, close, cancel) must present this token, and the backend verifies it against the stored value for that event before proceeding (I9 enforcement).
+- Event creation and host management token generation are **one transactional operation** (I8) — an event is never created without a token, and a token is never generated without an event.
+- The token must **never** be accepted as an arbitrary client-supplied or client-invented value — only a backend-generated token, matched against the stored value, is valid. A client cannot choose or invent its own token and have it accepted.
+- No User entity, username/password login, JWT, or Spring Security setup is introduced by this decision. This is explicitly a **first-pass authorization mechanism**, not a full user-account system — it establishes "whoever holds this token may manage this event," not a verified real-world identity.
+- The host management token is a **distinct concept** from the invitee's unique invitation token (I7): the host token authorizes management of an entire event; an invitation token scopes exactly one invitee's RSVP access to that event. The two must never be confused or interchangeable.
+- **Not addressed by this decision** (open limitations of this first-pass model): token recovery if lost, token rotation/expiry, and whether an event may have more than one host holding a valid token (Q4, still separately unresolved).
+
 ### Open Questions
 
 | ID | Question | Why it matters |
 |---|---|---|
 | Q1 | Does "Maybe" count toward capacity? | Defines when max-capacity is "reached" |
 | Q2 | Do invitees need an account, or is the link sufficient? | Defines the entire invitee trust/security model |
-| Q3 | Does the host require authentication? | Blocks enforcement of host-only actions |
 | Q4 | Can an event have more than one host? | Affects ownership and authorization; blocks the final ownership/scope model |
 | Q6 | Can a closed/cancelled event be reopened? | Affects the event lifecycle state machine |
 | Q7 | What is the waitlist ordering policy? | Determines who is promoted first |
@@ -100,7 +113,7 @@ All ten behavioral facts from the README (event creation fields, host assignment
 | — | Is invitation delivery synchronous or asynchronous? | Affects host-facing latency and delivery reliability design |
 | — | Is editing event details after creation permitted? | Affects event-editing scope, if ever requested |
 
-None of these are resolved in this document.
+None of these are resolved in this document. (Q3 was previously listed here and is now resolved — see "Resolved Decisions" above.)
 
 ---
 
@@ -108,7 +121,7 @@ None of these are resolved in this document.
 
 ### Actors
 
-**Host** — creates and owns an event; wants to know who is coming and retain control over the response window. May invite people, view the attendance dashboard, close responses, and cancel the event. Whether the host must be authenticated is unresolved (Q3). Whether an event may have more than one host is unresolved (Q4).
+**Host** — creates and owns an event; wants to know who is coming and retain control over the response window. May invite people, view the attendance dashboard, close responses, and cancel the event. Host authorization for these host-only operations is established via a backend-generated **host management token** (Q3 resolved — see Section 4); this is a first-pass mechanism, not a full account system. Whether an event may have more than one host is unresolved (Q4).
 
 **Invitee** — receives a unique link; wants to indicate attendance and change their mind before the event starts. May open the link and respond Yes/No/Maybe, and change that response before start. Access is via the link only (A3, unresolved per Q2).
 
@@ -118,13 +131,13 @@ No other human actors exist. Capacity evaluation, waitlist promotion, and RSVP l
 
 | Workflow | Actor/Initiator | Trigger | Preconditions | Major Steps | State Changes | Dependencies | Failure/Blocked Path | Related Open Items |
 |---|---|---|---|---|---|---|---|---|
-| Event creation | Host | Host decides to create an event | None stated | Provide fields → submit | Event exists; creator = host | None (entry point) | Missing/invalid fields not specified | A1, Q3, Q4 |
-| Invitation | Host | Host invites by email | Event exists | Provide email → unique link created | New Invitation exists, unanswered | Depends on Event creation | Duplicate invite / invite-after-close not specified | A7, Q8 |
+| Event creation | Host | Host decides to create an event | None stated | Provide fields → submit | Event exists; creator = host; a host management token is generated and stored in the same transaction (I8, Q3 resolved) | None (entry point) | Missing/invalid fields not specified | Q4 |
+| Invitation | Host | Host invites by email | Event exists; valid host management token for this event presented | Provide email → unique link created | New Invitation exists, unanswered | Depends on Event creation | Duplicate invite / invite-after-close not specified | A7, Q8 |
 | RSVP submission | Invitee | Invitee opens link, responds | Valid link; event open; not started | Select Yes/No/Maybe → submit | Response set; if Yes, triggers Capacity Evaluation | Depends on Invitation | Blocked if locked/closed/cancelled | A2, A3, Q1 |
 | RSVP change | Invitee | Invitee revisits link, changes response | Event not started | Select new response → submit | Response changes; may trigger Capacity Evaluation or Promotion | Depends on prior RSVP submission | Blocked after start (I2) | Q13, Q14 |
-| Dashboard | Host | Host opens dashboard | Host recognized for event | View counts + attendee list | None (read-only) | Depends on Event creation; reflects RSVP/Promotion state | Not specified for cancelled events | "Live" definition unresolved |
-| Close | Host | Host closes responses | Event exists | Issue close action | Event enters "closed" | Independent; feeds into RSVP-blocked path | Reversibility unresolved | A5, Q6, Q11, Q14 |
-| Cancel | Host | Host cancels the event | Event exists | Issue cancel action | Event enters "cancelled" | Independent; feeds into RSVP-blocked path | Reversibility unresolved | A5, Q6, Q11 |
+| Dashboard | Host | Host opens dashboard | Valid host management token for this event presented | View counts + attendee list | None (read-only) | Depends on Event creation; reflects RSVP/Promotion state | Not specified for cancelled events | "Live" definition unresolved |
+| Close | Host | Host closes responses | Event exists; valid host management token for this event presented | Issue close action | Event enters "closed" | Independent; feeds into RSVP-blocked path | Reversibility unresolved | A5, Q6, Q11, Q14 |
+| Cancel | Host | Host cancels the event | Event exists; valid host management token for this event presented | Issue cancel action | Event enters "cancelled" | Independent; feeds into RSVP-blocked path | Reversibility unresolved | A5, Q6, Q11 |
 | Capacity Evaluation | **System** | Response becomes "Yes" (occurs inside RSVP submission/change processing, not a separate entry point) | Max-capacity set | Compare confirmed count to capacity | Confirmed or Waitlisted | Internal consequence of RSVP submission/change | None stated | A2, Q1 |
 | Waitlist Promotion | **System** | Confirmed attendee changes to "No" (occurs inside RSVP change processing) | Waitlist non-empty | Select and promote one waitlisted invitee | One invitee becomes Confirmed | Internal consequence of RSVP change | None stated for the named case | A6, Q7, Q13 |
 | Lock-after-start evaluation | **System** | Evaluated at the moment of each RSVP attempt (not a proactive background process) | Event has a start time | Compare current time to start time | Event treated as locked if past start (derived, not stored) | Internal consequence, evaluated within RSVP submission/change processing | Produces the RSVP-blocked path | Q12 |
@@ -155,13 +168,13 @@ No new human actor is introduced by this table — "System" denotes automatic ba
 |---|---|---|---|---|---|---|
 | I6 RSVP Value | Response must be exactly Yes/No/Maybe, distinct from Attendance Outcome | Value outside the set, or Response/Outcome conflated | Unrestricted input, or missing separation | RSVP submission/change, Capacity Evaluation | Input constraint + conceptual separation | Fact |
 | I7 Invitation Scope | A link must correspond to exactly the correct invitation/event | Link resolves to wrong invitee/event | Weak binding | Invitation, RSVP submission/change, invalid link | Not specified — mechanism unresolved | Fact + Open Questions (Q8, Q9) |
-| I8 Host/Event Ownership | Every event has its creator recorded as host | Event with no/incorrect host | Creation path skips assignment | Event creation | Assignment at creation time | Fact |
+| I8 Host/Event Ownership | Every event has its creator recorded as host | Event with no/incorrect host, or an event with no host management token | Creation path skips assignment or token generation | Event creation | Host assignment and host management token generation occur in the same transaction as event creation | Fact + Resolved Decision (Host Management Token — Section 4) |
 
 ### Authorization Invariants
 
 | Name | Statement | Break Scenario | Trigger | Workflows Affected | Protection Note | Source |
 |---|---|---|---|---|---|---|
-| I9 Host-Only Actions | Only the recognized host may invite, view dashboard, close, or cancel | Non-host performs a host-only action | No verification of requester vs. recorded host | Invitation, Dashboard, Close, Cancel | Authorization check pending host authentication | Fact + Open Question (Q3, unresolved) |
+| I9 Host-Only Actions | Only the recognized host may invite, view dashboard, close, or cancel | Non-host performs a host-only action | Request omits or presents an incorrect/mismatched host management token | Invitation, Dashboard, Close, Cancel | Authorization check: verify the presented host management token matches the event's stored token | Fact + Resolved Decision (Host Management Token — Q3 resolved) |
 | I10 Invitee Scope | An invitee interaction must only affect their own invitation/RSVP/event | Link crosses into another invitee's or event's data | Weak link binding | RSVP submission/change, invalid link | Scoping check pending invitee identity model | Fact + Open Question (Q2, unresolved) |
 
 ### Concurrency Invariants
@@ -199,7 +212,7 @@ PostgreSQL
 | PostgreSQL | Authoritative persistent storage | Writes via Persistence Boundary | Durable state via Persistence Boundary | All durable event/invitation/RSVP/outcome state | No schema decided here |
 | Invitation Delivery Boundary | Deliver the invitation email | Delivery request (event + invitee + link) | Delivery result (mechanism unresolved) | Only the act of external delivery | Not assumed to be the existing `wasender` integration; sync/async unresolved |
 
-**Ownership Boundaries:** Event/RSVP business rules, capacity/promotion decisions, and authorization decisions belong to Business Logic. Business Logic makes and coordinates these business decisions. **The Persistence Boundary and PostgreSQL participate in enforcing and durably preserving those decisions — including integrity and concurrency guarantees — but they do not independently decide business policy.** UI state belongs to the Frontend; delivery belongs to the Invitation Delivery Boundary. The one soft edge: the Request Boundary must only carry an identity claim forward — it must never itself decide authorization.
+**Ownership Boundaries:** Event/RSVP business rules, capacity/promotion decisions, and authorization decisions belong to Business Logic. Business Logic makes and coordinates these business decisions. **The Persistence Boundary and PostgreSQL participate in enforcing and durably preserving those decisions — including integrity and concurrency guarantees — but they do not independently decide business policy.** UI state belongs to the Frontend; delivery belongs to the Invitation Delivery Boundary. The one soft edge: the Request Boundary must only carry an identity claim forward — it must never itself decide authorization. For host-only operations, this identity claim is the host management token (Q3 resolved — Section 4): the Request Boundary forwards it, but only Business Logic verifies it against the event's stored token.
 
 **Dependency Direction:** Frontend → Request Boundary → Business Logic → Persistence Boundary → PostgreSQL, with Business Logic also calling out to the Invitation Delivery Boundary. No reverse dependencies.
 
@@ -222,7 +235,8 @@ No background/scheduled infrastructure is introduced by this clarification — L
 | Concept | Source of Truth | Mutated By | Read By | Derived State | Lifecycle Note |
 |---|---|---|---|---|---|
 | Event core details | PostgreSQL | Business Logic | Frontend, Business Logic | None | **Initially written at creation; post-creation mutation remains unresolved** (see Section 4/15) |
-| Host ownership | PostgreSQL | Business Logic, at creation | Business Logic (I9) | None | Assigned once; whether an event may have more than one host is unresolved (Q4) |
+| Host ownership | PostgreSQL | Business Logic, at creation, in the same transaction as host management token generation | Business Logic (I9) | None | Assigned once; whether an event may have more than one host is unresolved (Q4) |
+| Host management token | PostgreSQL | Business Logic, generated exactly once at event creation — never client-supplied, never regenerated in this first-pass model | Business Logic, to authorize host-only operations (I9) | None — a stored, backend-generated random value | Created in the same transaction as the event and host assignment (I8); distinct from the invitee's invitation token (I7) — the host token authorizes managing the whole event, the invitation token scopes one invitee's RSVP; recovery/rotation if lost is out of scope for this first-pass model (Q3) |
 | Event lifecycle/status | PostgreSQL | Business Logic, via Close/Cancel | Business Logic, Frontend | "Start reached" is derived from stored start time, not stored | Open→Closed/Cancelled known; reverse transitions unresolved (Q6, Q11) |
 | Invitation | PostgreSQL | Business Logic, on invite | Business Logic, Delivery Boundary | None | Duplicate policy (Q8) and expiry (Q9) unresolved |
 | RSVP Response (Yes/No/Maybe) | PostgreSQL | Business Logic, only on invitee request, subject to I2/I4/I5 | Business Logic, invitee's own view, host dashboard | None | See RSVP Lifecycle below |
@@ -248,30 +262,32 @@ Outcome transitions: None→Confirmed/Waitlisted (on Yes); Waitlisted→Confirme
 ## 9. Trust Boundaries and Security Notes
 
 ### Trust Entry Points
-1. **Host browser → backend** — event fields, invitee email, action requests, any claimed host identity. Frontend input is untrusted; the backend must not accept a host identity claim at face value.
+1. **Host browser → backend** — event fields, invitee email, action requests, and (for host-only operations) the host management token. Frontend input is untrusted; the backend must not accept a bare identity claim at face value — for host-only operations, the caller must present the backend-generated host management token, verified against the event's stored value (Q3 resolved — Section 4).
 2. **Invitee unique link → backend** — token, RSVP choice, identifiers. Possession of the link is security-sensitive under A3 (a working assumption, not a settled security decision); the client must never directly choose Confirmed/Waitlisted.
 3. **Backend → Invitation Delivery Boundary** — email, event info, token. External boundary; must never become authoritative for Invitation validity; `wasender` is not assumed appropriate.
 
 ### Authentication vs. Authorization
-**Authentication** (proving who is asking) is unresolved for both Host (Q3) and Invitee (Q2) — both remain genuine implementation blockers. **Authorization** (deciding if they may act) is specified independently of that: only the host may invite/view dashboard/close/cancel (I9); an invitee may only affect their own invitation/RSVP/event (I10); even an authorized caller is still blocked by business rules (event started, closed, cancelled, or an invalid transition) — authentication never bypasses invariants.
+**Authentication for the Host is now resolved (Q3)** via the host management token: a backend-generated, cryptographically random, unguessable token created at event creation and required for host-only operations. This is a **first-pass mechanism** establishing "whoever holds this token may manage this event" — it is not a verified real-world identity and not a full account system. **Authentication for the Invitee remains unresolved (Q2)** — a genuine implementation blocker. **Authorization** (deciding if they may act) is specified independently: only the host may invite/view dashboard/close/cancel (I9), enforced by verifying the presented host management token against the event's stored token; an invitee may only affect their own invitation/RSVP/event (I10); even an authorized caller is still blocked by business rules (event started, closed, cancelled, or an invalid transition) — authentication never bypasses invariants.
 
 ### Authorization Enforcement
-Business Logic makes every allow/deny decision. The Request Boundary may carry an identity claim forward but must not decide authorization itself (the one flagged soft edge in the architecture).
+Business Logic makes every allow/deny decision. The Request Boundary may carry an identity claim forward but must not decide authorization itself (the one flagged soft edge in the architecture). For host-only actions, this means Business Logic — not the Request Boundary — compares the presented host management token against the event's stored token.
 
 ### Sensitive Data / Privileged Operations
-Unique invitation tokens function as a credential-equivalent under the A3 working assumption. Invitee email, host identity, event ownership, RSVP Response, and Attendance Outcome are all scoped to the relevant host/invitee only, never to unrelated parties. Privileged operations (invite, dashboard, close, cancel) require host authorization; system-controlled outcomes (Confirm/Waitlist, promotion) must never be directly triggerable by a client request.
+Unique invitation tokens function as a credential-equivalent under the A3 working assumption; the host management token is likewise a credential-equivalent value, but for host-level control of an entire event rather than one invitee's RSVP — the two are distinct and must never be confused or interchangeable. Invitee email, host identity, event ownership, RSVP Response, and Attendance Outcome are all scoped to the relevant host/invitee only, never to unrelated parties. Privileged operations (invite, dashboard, close, cancel) require a valid host management token; system-controlled outcomes (Confirm/Waitlist, promotion) must never be directly triggerable by a client request.
+
+**Host management token exposure/loss:** since this token is the sole first-pass authorization mechanism for a host, its loss means loss of host control over the event, and its leak means an outsider gains full host control — there is no recovery or rotation mechanism in this first-pass model. This is a known, accepted limitation of the decision, not silently ignored (see Section 12).
 
 ### Event-Level Isolation
-Tenant isolation is not applicable (Section 6). Event-level isolation is still required: one host cannot manage another host's event (I9); one invitee cannot access another invitee's invitation/RSVP (I10); one token cannot cross event boundaries (I7).
+Tenant isolation is not applicable (Section 6). Event-level isolation is still required: one host cannot manage another host's event (I9, now concretely enforced via host management token verification); one invitee cannot access another invitee's invitation/RSVP (I10); one token cannot cross event boundaries (I7).
 
 ### Sensitive Data Paths
 **Invitation path:** Host UI → Backend → Business Logic → PostgreSQL (stores invitation) → Invitation Delivery Boundary → Invitee. Exposure risk points: backend logs, the external delivery provider, and the recipient's inbox — all outside this system's control once handed off.
 **RSVP path:** Invitee link → Backend → Business Logic (validates I10 scope, I2/I4/I5 rules, I1 capacity) → PostgreSQL → Host dashboard read (gated by I9).
-**Host action path:** Host UI → Backend → host authorization check → Business Logic → PostgreSQL. If the backend trusted a frontend-supplied host/event relationship without verification, any caller could act as host of any event, violating I9.
+**Host action path:** Host UI → Backend → host authorization check (verify the presented host management token against the event's stored token) → Business Logic → PostgreSQL. The token must never be accepted as an arbitrary client-defined value — only a backend-generated token matching the stored value is valid. If the backend instead trusted a client-supplied host/event relationship without this check, any caller could act as host of any event, violating I9.
 
 An RSVP attempt against a cancelled event is left fully unresolved here — no control is asserted, pending Q11.
 
-No authentication framework, session mechanism, or cryptographic implementation is designed here.
+No full authentication framework (e.g., Spring Security), session mechanism, User entity, or specific cryptographic algorithm/library is chosen here — only the conceptual host management token mechanism is decided (Q3). Its exact generation/storage implementation remains an implementation-time decision consistent with "cryptographically random and unguessable." Invitee authentication (Q2) remains entirely undesigned.
 
 ---
 
@@ -286,14 +302,14 @@ No authentication framework, session mechanism, or cryptographic implementation 
 | Close vs RSVP Race | Close vs. RSVP submission/change | Stale status read | RSVP accepted just after close | I4 | Re-read authoritative status at write time; scope (Q14) unresolved |
 | Start-Time Boundary | RSVP submission/change vs. Lock-after-start evaluation | Client/server clock mismatch, latency | RSVP accepted after start due to stale client state | I2 | Server-side time check at moment of processing; timezone unresolved (Q12) |
 | Cancel vs RSVP Race | Cancel vs. RSVP submission/change | Stale lifecycle state | Inconsistent evaluation near cancellation | I5 | Re-read authoritative status at write time; outcome unresolved (Q11) |
-| Partial Database Failure | Event creation, Invitation creation, RSVP+Outcome, Promotion | Multi-part write partially succeeds | Response without Outcome; Invitation without token; Event without host | I6, I7, I8, I3 | Each causally-linked pair in one transaction |
+| Partial Database Failure | Event creation, Invitation creation, RSVP+Outcome, Promotion | Multi-part write partially succeeds | Response without Outcome; Invitation without token; Event without host or without a generated host management token | I6, I7, I8, I3 | Each causally-linked pair in one transaction |
 | External Invitation Delivery Side Effect | Invitation | External call not transactional with DB | Delivery failure or DB failure after send | I7 | Invitation validity determined solely by PostgreSQL, never delivery outcome |
 
 ### First-Pass Concurrency Decision
 **Current choice:** a per-event pessimistic/serialized correctness boundary around the capacity decision. **This simplifies correctness reasoning only when every capacity-changing path uses the same protected boundary — locking alone does not automatically guarantee correctness if any path bypasses it.** Optimistic version-based concurrency remains a reasonable later alternative if contention becomes a measured concern; it is not chosen now, for simplicity and explainability.
 
 ### Transaction Boundaries
-Five causally-linked write groups must succeed/fail together: (1) Response + capacity decision + Outcome, (2) Confirmed→No + promotion, (3) Event creation + host assignment, (4) Invitation creation + token relationship, (5) Close/Cancel state check-then-write.
+Five causally-linked write groups must succeed/fail together: (1) Response + capacity decision + Outcome, (2) Confirmed→No + promotion, (3) Event creation + host assignment + host management token generation (I8 — the token is generated in the same transaction as the event and its host assignment, never after the fact), (4) Invitation creation + token relationship, (5) Close/Cancel state check-then-write.
 
 ### Correctness Guarantees
 1. Confirmed attendance never exceeds max-capacity (depends on Q1 for full correctness).
@@ -338,7 +354,7 @@ Same as Section 9 — required regardless of tenancy: one host cannot manage ano
 | Partial database update | Half-completed linked writes | No shared transaction | Transactional writes per Section 10 |
 | Duplicate RSVP submission | Same action processed twice | No dedup on repeated requests | Single authoritative Response + idempotent side effects |
 | Conflicting RSVP updates | Lost update / stale-based promotion | Concurrent writes to one Response | Version check or serialization; no invented Last-Write-Wins |
-| **Host authentication unresolved** | Host-only actions unenforceable | Identity mechanism unresolved (Q3) | **No mitigation exists — hard blocker** |
+| **Host management token loss/leak** | Host permanently loses control of their event, or an outsider gains full host control | The token is the sole first-pass authorization credential (Q3 resolved), with no recovery/rotation mechanism | Token is backend-generated and never client-invented; loss/leak risk is a known first-pass limitation, not silently ignored |
 | **Invitee-link trust risk** | Non-invitee acts as invitee | Link = identity under A3 | Scope limited to one invitation; Q2/Q9 unresolved |
 | **Multiple-host ambiguity** | Ownership/authorization model may not match actual usage | Q4 unresolved | Kept explicit as an open question, not decided |
 | Close vs RSVP race | RSVP accepted on stale status | No re-check at write boundary | Re-check status at write time; scope (Q14) unresolved |
@@ -348,14 +364,14 @@ Same as Section 9 — required regardless of tenancy: one host cannot manage ano
 | **Invitation delivery failure** | Email not delivered | External dependency, not transactional with DB | Invitation validity stays PostgreSQL-determined |
 | Wrong recipient / invitation pairing | Link sent to wrong person | Sensitive pairing error | Backend must construct pairing correctly before handoff |
 | Duplicate invitation ambiguity | Duplicate invitation state | Q8 unresolved | Uniqueness rule deferred until Q8 decided |
-| Email/token logging exposure | Token/email leaks via logs | Token = credential-equivalent under A3 | Avoid ordinary logging of raw tokens |
+| Email/token logging exposure | Invitation token, host management token, or email leaks via logs | Both token types are credential-equivalent (A3 for invitation tokens; the Host Management Token decision for host tokens) | Avoid ordinary logging of raw tokens of either kind |
 | PostgreSQL unavailable | All core workflows fail | Sole authoritative store, no fallback | Fail honestly; frontend never becomes truth |
 | External invitation provider unavailable | Email delivery fails | Separate external system availability | Core RSVP/event state unaffected (decoupled) |
 | **Repository mismatch risk** | Implementation built on wrong assumptions | React version mismatch, unrelated scaffold code | Kept visible as cleanup decisions, not resolved |
 
 **Assumption Failure Risks:** if A2, A3, A4, A6, or A7 turn out false, the capacity logic, invitee trust model, ownership model, promotion logic, or capacity/attendee-counting semantics respectively would need to change (see Section 4 for each assumption's dependency).
 
-None of the unresolved product questions above (Q1, Q3, Q4, Q6–Q9, Q11–Q14) are treated as bugs — they are explicit open decisions, not defects.
+None of the unresolved product questions above (Q1, Q4, Q6–Q9, Q11–Q14) are treated as bugs — they are explicit open decisions, not defects. (Q3 is now resolved — see Section 4.)
 
 ---
 
@@ -369,7 +385,7 @@ None of the unresolved product questions above (Q1, Q3, Q4, Q6–Q9, Q11–Q14) 
 | Event-start lock | **Chosen** | Derived from stored start time vs. current time, over a persisted flag, to avoid inventing background infrastructure |
 | Invitation/RSVP data shape | **Deferred / first-pass** | Leaning toward separate Invitation and RSVP concepts, matching the natural lifecycle; not fully re-examined at a schema level |
 | **Invitee identity** | **Working assumption; final model unresolved** | Link-only access (A3) is used to let the design proceed; whether this is sufficient or an account is required is **not decided** (Q2) |
-| **Host identity** | **Unresolved, implementation-blocking** | Neither an authenticated account nor a possession-based secret has been chosen (Q3) |
+| **Host identity** | **Chosen (first-pass)** | Host Management Token — the backend generates a cryptographically random, unguessable token at event creation, in the same transaction as host assignment; the client must present it for host-only operations. No User entity, login, password, JWT, or Spring Security setup. Explicitly a first-pass authorization mechanism, not a full account system; token recovery/rotation is out of scope, and multi-host support (Q4) remains separately unresolved |
 | **Multiple hosts** | **Unresolved** | Whether an event may have more than one host is not decided (Q4); single-host is used only as a working assumption (A4) |
 | **Waitlist ordering** | **Working assumption; ordering policy unresolved** | FIFO (A6) is used as the simplest interpretation of "automatically," but the actual policy is **not decided** (Q7) |
 | **Duplicate invitation policy** | **Deferred / unresolved (Q8)** | The task does not specify whether the same email may receive more than one invitation for the same event. Disallowing duplicates simplifies RSVP/capacity identity and counting but requires an explicit uniqueness rule; allowing duplicates is more flexible but requires explicit semantics for capacity and attendee counting. **Not decided here.** |
@@ -397,14 +413,14 @@ A safe incremental order, following design dependencies:
 1. **Core domain/state** — the minimum persistent concepts: Event, Invitation, RSVP Response, Attendance Outcome.
 2. **Core workflows** — event creation, invitation creation, RSVP submission/change, host dashboard.
 3. **Correctness controls** — capacity, waitlist, promotion, lock-after-start, close/cancel rules.
-4. **Identity/security** — the chosen host/invitee identity model, once Q2/Q3 are resolved.
+4. **Identity/security** — host-side authorization can now be implemented via the Host Management Token (Q3, resolved); invitee-side identity remains blocked pending Q2.
 5. **Invitation delivery** — the chosen email-delivery mechanism, once its sync/async model is decided (no provider introduced here).
 6. **Validation and edge cases** — failure paths, concurrency scenarios, invalid token behavior, boundary-time behavior, and any open questions resolved along the way.
 
-**"Implemented" does not mean "safe to expose."** Host-only workflows built in step 2 (invite, dashboard) and Close/Cancel in step 3 must not be exposed to real users before step 4 resolves Q3; invitee-facing RSVP workflows must not be exposed before Q2 is resolved; capacity-sensitive RSVP submission must not be exposed before step 3's concurrency controls are actually implemented, not just designed.
+**"Implemented" does not mean "safe to expose."** Host-only workflows built in step 2 (invite, dashboard) and Close/Cancel in step 3 must not be exposed to real users until the host management token check is actually implemented and enforced in code (Q3 is resolved at the design level, but that is not the same as being enforced); invitee-facing RSVP workflows must not be exposed before Q2 is resolved; capacity-sensitive RSVP submission must not be exposed before step 3's concurrency controls are actually implemented, not just designed.
 
 ### Rollout Dependencies / Blockers
-Q3 (host auth) blocks invite/dashboard/close/cancel. Q2 (invitee identity) blocks the final security design for RSVP submit/change. Q4 (multiple hosts) blocks the final ownership/scope model. Q7 blocks deterministic promotion. Q1 blocks the final capacity rule. Q11 blocks final lifecycle behavior. Q12 blocks final lock-after-start correctness. Q8 blocks the final uniqueness rule. The delivery execution model blocks final delivery integration.
+Host-only workflows (invite/dashboard/close/cancel) can now proceed once the host management token mechanism (Q3, resolved) is implemented and correctly enforced. Q2 (invitee identity) blocks the final security design for RSVP submit/change. Q4 (multiple hosts) blocks the final ownership/scope model. Q7 blocks deterministic promotion. Q1 blocks the final capacity rule. Q11 blocks final lifecycle behavior. Q12 blocks final lock-after-start correctness. Q8 blocks the final uniqueness rule. The delivery execution model blocks final delivery integration.
 
 ### Existing Repository Coexistence
 Leaving the unrelated bulk-messaging code in place risks confusion/accidental coupling; removing it risks deleting something intentionally retained. **Deferred until repository intent is clarified** — not silently deleted or reused.
@@ -429,7 +445,6 @@ Before considering the feature complete, verify: host authorization (I9), invite
 |---|---|---|---|
 | Q1 | Does "Maybe" count toward capacity? | Defines when max-capacity is "reached" | Final capacity rule (I1) |
 | Q2 | Invitee identity: link-only or authenticated account? | Defines the entire invitee trust/security model | Final RSVP submit/change security design |
-| Q3 | Does the host require authentication? | Nothing enforces I9 without it | All host-only workflows (invite, dashboard, close, cancel) |
 | Q4 | Can an event have more than one host? | Affects ownership and authorization | Final ownership/scope model |
 | Q6 | Can a closed/cancelled event be reopened? | Affects the event lifecycle state machine | Final lifecycle transitions |
 | Q7 | What is the waitlist ordering policy? | Determines who is promoted first | Deterministic promotion (I3, I12) |
@@ -445,3 +460,5 @@ Before considering the feature complete, verify: host authorization (I9), invite
 | — | Is editing event details after creation permitted? | Affects event-editing scope, if ever requested | Event data ownership finalization |
 
 Each question above appears exactly once in this table and is not contradicted by any other section of this document.
+
+**Q3 (host authentication/identity) has been resolved** via the Host Management Token decision (see Section 4, "Resolved Decisions") and is intentionally no longer listed here. It is removed from this table rather than marked "resolved" in place, so that this table continues to represent only genuinely open questions.
