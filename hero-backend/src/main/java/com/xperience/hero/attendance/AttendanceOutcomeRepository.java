@@ -5,6 +5,7 @@ import com.xperience.hero.invitation.Invitation;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.List;
+import java.util.Optional;
 
 public interface AttendanceOutcomeRepository extends JpaRepository<AttendanceOutcome, Long> {
 
@@ -31,4 +32,14 @@ public interface AttendanceOutcomeRepository extends JpaRepository<AttendanceOut
      * (DESIGN.md Section 8).
      */
     long countByInvitation_EventAndOutcomeAndInvitation_IdNot(Event event, AttendanceOutcomeValue outcome, Long invitationId);
+
+    /**
+     * The earliest-eligible WAITLISTED AttendanceOutcome for one Event, per
+     * the resolved FIFO waitlist ordering policy (DESIGN.md Section 4, Q7):
+     * ascending `waitlistedAt`, with Invitation id as a deterministic
+     * tie-breaker. Scoped to exactly one Event — never loads unrelated
+     * Events' waitlist state.
+     */
+    Optional<AttendanceOutcome> findFirstByInvitation_EventAndOutcomeOrderByWaitlistedAtAscInvitation_IdAsc(
+            Event event, AttendanceOutcomeValue outcome);
 }

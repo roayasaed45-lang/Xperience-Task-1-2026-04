@@ -199,6 +199,30 @@ class HostDashboardServiceTest {
     }
 
     @Test
+    void dashboardRemainsReadableAfterEventClosed() {
+        EventCreationResult event = createTestEvent();
+        invitationService.createInvitation(event.event().getId(), event.rawHostManagementToken(), "guest@example.com");
+        eventService.closeEvent(event.event().getId(), event.rawHostManagementToken());
+
+        HostDashboardResponse dashboard = hostDashboardService.getDashboard(
+                event.event().getId(), event.rawHostManagementToken());
+
+        assertEquals(1, dashboard.invitations().size());
+    }
+
+    @Test
+    void dashboardRemainsReadableAfterEventCancelled() {
+        EventCreationResult event = createTestEvent();
+        invitationService.createInvitation(event.event().getId(), event.rawHostManagementToken(), "guest@example.com");
+        eventService.cancelEvent(event.event().getId(), event.rawHostManagementToken());
+
+        HostDashboardResponse dashboard = hostDashboardService.getDashboard(
+                event.event().getId(), event.rawHostManagementToken());
+
+        assertEquals(1, dashboard.invitations().size());
+    }
+
+    @Test
     void dashboardDoesNotMutateDatabaseState() {
         EventCreationResult event = createTestEvent();
         invitationService.createInvitation(event.event().getId(), event.rawHostManagementToken(), "guest@example.com");

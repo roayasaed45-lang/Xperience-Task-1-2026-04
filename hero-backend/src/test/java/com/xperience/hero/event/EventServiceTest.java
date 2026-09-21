@@ -156,4 +156,91 @@ class EventServiceTest {
 
         assertThrows(IllegalArgumentException.class, () -> eventService.createEvent(request));
     }
+
+    @Test
+    void closeTransitionsOpenEventToClosed() {
+        EventCreationResult event = eventService.createEvent(validRequest());
+
+        Event closed = eventService.closeEvent(event.event().getId(), event.rawHostManagementToken());
+
+        assertEquals(EventStatus.CLOSED, closed.getStatus());
+    }
+
+    @Test
+    void cancelTransitionsOpenEventToCancelled() {
+        EventCreationResult event = eventService.createEvent(validRequest());
+
+        Event cancelled = eventService.cancelEvent(event.event().getId(), event.rawHostManagementToken());
+
+        assertEquals(EventStatus.CANCELLED, cancelled.getStatus());
+    }
+
+    @Test
+    void closeRejectsMissingToken() {
+        EventCreationResult event = eventService.createEvent(validRequest());
+
+        assertThrows(InvalidHostTokenException.class, () -> eventService.closeEvent(event.event().getId(), null));
+    }
+
+    @Test
+    void closeRejectsIncorrectToken() {
+        EventCreationResult event = eventService.createEvent(validRequest());
+
+        assertThrows(InvalidHostTokenException.class,
+                () -> eventService.closeEvent(event.event().getId(), "not-the-real-token"));
+    }
+
+    @Test
+    void cancelRejectsIncorrectToken() {
+        EventCreationResult event = eventService.createEvent(validRequest());
+
+        assertThrows(InvalidHostTokenException.class,
+                () -> eventService.cancelEvent(event.event().getId(), "not-the-real-token"));
+    }
+
+    @Test
+    void closeRejectsMissingEvent() {
+        assertThrows(EventNotFoundException.class, () -> eventService.closeEvent(999_999_999L, "any-token"));
+    }
+
+    @Test
+    void cancelRejectsMissingEvent() {
+        assertThrows(EventNotFoundException.class, () -> eventService.cancelEvent(999_999_999L, "any-token"));
+    }
+
+    @Test
+    void closingAlreadyClosedEventIsRejected() {
+        EventCreationResult event = eventService.createEvent(validRequest());
+        eventService.closeEvent(event.event().getId(), event.rawHostManagementToken());
+
+        assertThrows(InvalidEventTransitionException.class,
+                () -> eventService.closeEvent(event.event().getId(), event.rawHostManagementToken()));
+    }
+
+    @Test
+    void cancellingAlreadyCancelledEventIsRejected() {
+        EventCreationResult event = eventService.createEvent(validRequest());
+        eventService.cancelEvent(event.event().getId(), event.rawHostManagementToken());
+
+        assertThrows(InvalidEventTransitionException.class,
+                () -> eventService.cancelEvent(event.event().getId(), event.rawHostManagementToken()));
+    }
+
+    @Test
+    void cancellingClosedEventIsRejected() {
+        EventCreationResult event = eventService.createEvent(validRequest());
+        eventService.closeEvent(event.event().getId(), event.rawHostManagementToken());
+
+        assertThrows(InvalidEventTransitionException.class,
+                () -> eventService.cancelEvent(event.event().getId(), event.rawHostManagementToken()));
+    }
+
+    @Test
+    void closingCancelledEventIsRejected() {
+        EventCreationResult event = eventService.createEvent(validRequest());
+        eventService.cancelEvent(event.event().getId(), event.rawHostManagementToken());
+
+        assertThrows(InvalidEventTransitionException.class,
+                () -> eventService.closeEvent(event.event().getId(), event.rawHostManagementToken()));
+    }
 }

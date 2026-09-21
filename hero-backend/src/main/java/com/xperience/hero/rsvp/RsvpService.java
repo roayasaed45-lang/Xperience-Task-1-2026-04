@@ -31,22 +31,28 @@ import java.util.Optional;
  *
  * Implements the resolved capacity rule (Q1): only a YES response
  * participates in capacity; NO/MAYBE always resolve to Attendance Outcome
- * NONE. Capacity/waitlist decisions for YES are serialized via the existing
- * per-event pessimistic lock (Section 10 First-Pass Concurrency Decision) —
- * not a new locking mechanism.
+ * NONE.
  *
  * Implements the resolved time lock (I2 first-pass rule): RSVP creation or
  * change is rejected once the server clock is no longer strictly before the
  * event's eventDateTime. DESIGN.md Q12 (broader timezone policy) remains
  * open and is not addressed by this comparison.
  *
- * Deliberately NOT implemented here: waitlist promotion when a CONFIRMED
- * invitee later changes away from YES (Q7/Q13, unresolved — this slice only
- * ever reduces or leaves unchanged the CONFIRMED count, it never triggers a
- * promotion of a different, WAITLISTED invitation); whether Close blocks
- * changes to an existing RSVP (Q14, unresolved — only brand-new submissions
- * are blocked on a CLOSED event); any check against CANCELLED (I5/W13,
- * unresolved, no control asserted).
+ * Implements the resolved Event lifecycle enforcement (Section 4, Q11/Q14
+ * and Cancel behavior): CLOSED and CANCELLED both block every RSVP
+ * create/change; only an OPEN event accepts RSVP writes.
+ *
+ * Implements the resolved waitlist ordering (Q7 — FIFO via
+ * AttendanceOutcome.waitlistedAt) and promotion trigger scope (Q13 — any
+ * CONFIRMED->NONE transition, i.e. Yes->No or Yes->Maybe, before event
+ * start, automatically promotes the earliest-eligible WAITLISTED
+ * Invitation). Capacity decisions and promotion both execute inside the
+ * same per-event pessimistic lock (Section 10 First-Pass Concurrency
+ * Decision) — a single serialized boundary, not two separate mechanisms.
+ *
+ * Deliberately NOT implemented here: any waitlist behavior beyond the
+ * resolved FIFO/trigger rules (e.g. manual reordering); anything tied to
+ * Q4 (multiple hosts), Q9 (token expiry), or Q12 (broader timezone policy).
  */
 @Service
 public class RsvpService {
@@ -87,22 +93,41 @@ public class RsvpService {
             throw new RsvpLockedException();
         }
 
-        Optional<RsvpResponse> existingResponse = resolveAtMostOne(
-                rsvpResponseRepository.findByInvitation(invitation), invitation.getId(), "RsvpResponse");
-
-        if (existingResponse.isEmpty() && event.getStatus() == EventStatus.CLOSED) {
+        if (event.getStatus() == EventStatus.CLOSED) {
             throw new EventClosedException();
         }
+        if (event.getStatus() == EventStatus.CANCELLED) {
+            throw new EventCancelledException();
+        }
+
+        Optional<RsvpResponse> existingResponse = resolveAtMostOne(
+                rsvpResponseRepository.findByInvitation(invitation), invitation.getId(), "RsvpResponse");
 
         Optional<AttendanceOutcome> existingOutcome = resolveAtMostOne(
                 attendanceOutcomeRepository.findByInvitation(invitation), invitation.getId(), "AttendanceOutcome");
 
-        AttendanceOutcomeValue outcomeValue;
-        if (requestedResponse == RsvpResponseValue.YES) {
+        AttendanceOutcomeValue previousOutcomeValue = existingOutcome.map(AttendanceOutcome::getOutcome).orElse(null);
+
+        boolean capacityRelevant = requestedResponse == RsvpResponseValue.YES
+                || previousOutcomeValue == AttendanceOutcomeValue.CONFIRMED;
+        if (capacityRelevant) {
             eventService.lockForCapacityDecision(event.getId());
+        }
+
+        AttendanceOutcomeValue outcomeValue;
+        LocalDateTime waitlistedAt;
+        if (requestedResponse == RsvpResponseValue.YES) {
             outcomeValue = resolveCapacityOutcome(event, invitation.getId());
+            if (outcomeValue == AttendanceOutcomeValue.WAITLISTED) {
+                waitlistedAt = previousOutcomeValue == AttendanceOutcomeValue.WAITLISTED
+                        ? existingOutcome.get().getWaitlistedAt()
+                        : LocalDateTime.now();
+            } else {
+                waitlistedAt = null;
+            }
         } else {
             outcomeValue = AttendanceOutcomeValue.NONE;
+            waitlistedAt = null;
         }
 
         RsvpResponse response = existingResponse.orElseGet(() -> RsvpResponse.builder().invitation(invitation).build());
@@ -111,9 +136,36 @@ public class RsvpService {
 
         AttendanceOutcome outcome = existingOutcome.orElseGet(() -> AttendanceOutcome.builder().invitation(invitation).build());
         outcome.setOutcome(outcomeValue);
+        outcome.setWaitlistedAt(waitlistedAt);
         attendanceOutcomeRepository.save(outcome);
 
+        boolean freedConfirmedSpot = previousOutcomeValue == AttendanceOutcomeValue.CONFIRMED
+                && requestedResponse != RsvpResponseValue.YES;
+        if (freedConfirmedSpot) {
+            promoteNextWaitlisted(event);
+        }
+
         return new RsvpSubmissionResult(invitation, requestedResponse, outcomeValue);
+    }
+
+    /**
+     * Promotes the earliest-eligible WAITLISTED Invitation for this Event
+     * (Q7 FIFO ordering: ascending waitlistedAt, Invitation id tie-breaker)
+     * to CONFIRMED, clearing its waitlistedAt. Does not touch its
+     * RsvpResponse — the promoted invitee's response remains whatever it
+     * already was (always YES, since only a YES response can be WAITLISTED).
+     * A no-op if the waitlist is empty. Must be called only while already
+     * holding the per-event pessimistic lock (Section 10).
+     */
+    private void promoteNextWaitlisted(Event event) {
+        attendanceOutcomeRepository
+                .findFirstByInvitation_EventAndOutcomeOrderByWaitlistedAtAscInvitation_IdAsc(
+                        event, AttendanceOutcomeValue.WAITLISTED)
+                .ifPresent(promoted -> {
+                    promoted.setOutcome(AttendanceOutcomeValue.CONFIRMED);
+                    promoted.setWaitlistedAt(null);
+                    attendanceOutcomeRepository.save(promoted);
+                });
     }
 
     private AttendanceOutcomeValue resolveCapacityOutcome(Event event, Long invitationId) {

@@ -19,6 +19,8 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+import java.time.LocalDateTime;
+
 /**
  * Attendance Outcome domain entity, per DESIGN.md Section 8 (Data Ownership
  * and State Model) and the resolved ownership decision (Section 4,
@@ -37,10 +39,16 @@ import lombok.Setter;
  * never inserts a second row for the same Invitation. This is current-state
  * only, not history.
  *
- * Deliberately NOT represented here: capacity counters, waitlist position,
- * promotion timestamps, or any ordering/history field — all of that
- * requires waitlist/promotion logic and depends on unresolved questions
- * (Q7, Q13), not decided in this slice.
+ * Carries `waitlistedAt` (DESIGN.md Section 4, Q7 resolved — FIFO waitlist
+ * ordering): set only on the transition into WAITLISTED, left unchanged
+ * while continuously WAITLISTED, and cleared on leaving WAITLISTED (i.e.
+ * whenever the outcome is CONFIRMED or NONE, this must be null). Promotion
+ * selects ascending `waitlistedAt` with Invitation id as a deterministic
+ * tie-breaker (see AttendanceOutcomeRepository).
+ *
+ * Deliberately NOT represented here: any explicit waitlist position/rank
+ * column — ordering is derived entirely from `waitlistedAt` plus Invitation
+ * id, never a separately maintained rank.
  */
 @Entity
 @Table(
@@ -65,4 +73,15 @@ public class AttendanceOutcome {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private AttendanceOutcomeValue outcome;
+
+    /**
+     * Set only when this Invitation transitions into WAITLISTED; left
+     * unchanged while it remains continuously WAITLISTED; cleared (null)
+     * whenever it leaves WAITLISTED (outcome CONFIRMED or NONE). Business
+     * logic (RsvpService), not the database, enforces this — there is no
+     * database CHECK constraint tying this column's nullability to the
+     * outcome value.
+     */
+    @Column(name = "waitlisted_at")
+    private LocalDateTime waitlistedAt;
 }

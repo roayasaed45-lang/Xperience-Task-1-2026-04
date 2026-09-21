@@ -2,9 +2,11 @@ package com.xperience.hero.web;
 
 import com.xperience.hero.dashboard.AmbiguousInvitationStateException;
 import com.xperience.hero.event.EventNotFoundException;
+import com.xperience.hero.event.InvalidEventTransitionException;
 import com.xperience.hero.event.InvalidHostTokenException;
 import com.xperience.hero.invitation.DuplicateInvitationException;
 import com.xperience.hero.invitation.InvalidInvitationTokenException;
+import com.xperience.hero.rsvp.EventCancelledException;
 import com.xperience.hero.rsvp.EventClosedException;
 import com.xperience.hero.rsvp.RsvpLockedException;
 import org.springframework.http.HttpStatus;
@@ -64,6 +66,16 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(EventClosedException.class)
     public ResponseEntity<ErrorResponse> handleEventClosed(EventClosedException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(new ErrorResponse(ex.getMessage()));
+    }
+
+    @ExceptionHandler(EventCancelledException.class)
+    public ResponseEntity<ErrorResponse> handleEventCancelled(EventCancelledException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(new ErrorResponse(ex.getMessage()));
+    }
+
+    @ExceptionHandler(InvalidEventTransitionException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidEventTransition(InvalidEventTransitionException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(new ErrorResponse(ex.getMessage()));
     }
 }

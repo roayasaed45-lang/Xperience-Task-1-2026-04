@@ -18,6 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -38,7 +39,16 @@ class EventControllerTest {
     @Autowired
     private EventRepository eventRepository;
 
+    @Autowired
+    private EventService eventService;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    private EventCreationResult createTestEvent() {
+        return eventService.createEvent(new CreateEventRequest(
+                "Team Offsite", "Quarterly planning session", java.time.LocalDateTime.now().plusDays(7), "Main Office", 10
+        ));
+    }
 
     @Test
     void createsEventViaEndpoint() throws Exception {
@@ -156,5 +166,95 @@ class EventControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void closeEndpointReturns200WithClosedStatus() throws Exception {
+        EventCreationResult event = createTestEvent();
+
+        MvcResult result = mockMvc.perform(put("/api/events/{eventId}/close", event.event().getId())
+                        .header("X-Host-Management-Token", event.rawHostManagementToken()))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        JsonNode json = objectMapper.readTree(result.getResponse().getContentAsString());
+        assertEquals("CLOSED", json.get("status").asText());
+        assertEquals(event.event().getId(), json.get("id").asLong());
+    }
+
+    @Test
+    void cancelEndpointReturns200WithCancelledStatus() throws Exception {
+        EventCreationResult event = createTestEvent();
+
+        MvcResult result = mockMvc.perform(put("/api/events/{eventId}/cancel", event.event().getId())
+                        .header("X-Host-Management-Token", event.rawHostManagementToken()))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        JsonNode json = objectMapper.readTree(result.getResponse().getContentAsString());
+        assertEquals("CANCELLED", json.get("status").asText());
+    }
+
+    @Test
+    void closeEndpointDoesNotExposeHostTokenHash() throws Exception {
+        EventCreationResult event = createTestEvent();
+
+        MvcResult result = mockMvc.perform(put("/api/events/{eventId}/close", event.event().getId())
+                        .header("X-Host-Management-Token", event.rawHostManagementToken()))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        JsonNode json = objectMapper.readTree(result.getResponse().getContentAsString());
+        assertFalse(json.has("hostTokenHash"));
+    }
+
+    @Test
+    void closeEndpointMissingTokenReturns401() throws Exception {
+        EventCreationResult event = createTestEvent();
+
+        mockMvc.perform(put("/api/events/{eventId}/close", event.event().getId()))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void cancelEndpointInvalidTokenReturns401() throws Exception {
+        EventCreationResult event = createTestEvent();
+
+        mockMvc.perform(put("/api/events/{eventId}/cancel", event.event().getId())
+                        .header("X-Host-Management-Token", "not-the-real-token"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void closeEndpointMissingEventReturns404() throws Exception {
+        mockMvc.perform(put("/api/events/{eventId}/close", 999_999_999L)
+                        .header("X-Host-Management-Token", "any-token"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void closingAlreadyClosedEventReturns409() throws Exception {
+        EventCreationResult event = createTestEvent();
+
+        mockMvc.perform(put("/api/events/{eventId}/close", event.event().getId())
+                        .header("X-Host-Management-Token", event.rawHostManagementToken()))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(put("/api/events/{eventId}/close", event.event().getId())
+                        .header("X-Host-Management-Token", event.rawHostManagementToken()))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void cancellingClosedEventReturns409() throws Exception {
+        EventCreationResult event = createTestEvent();
+
+        mockMvc.perform(put("/api/events/{eventId}/close", event.event().getId())
+                        .header("X-Host-Management-Token", event.rawHostManagementToken()))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(put("/api/events/{eventId}/cancel", event.event().getId())
+                        .header("X-Host-Management-Token", event.rawHostManagementToken()))
+                .andExpect(status().isConflict());
     }
 }

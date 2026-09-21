@@ -133,4 +133,30 @@ class RsvpControllerTest {
         assertFalse(json.has("invitationTokenHash"));
         assertFalse(json.has("hostTokenHash"));
     }
+
+    @Test
+    void closedEventReturns409() throws Exception {
+        EventCreationResult event = createTestEvent();
+        InvitationCreationResult invitation = createTestInvitation(event);
+        eventService.closeEvent(event.event().getId(), event.rawHostManagementToken());
+
+        mockMvc.perform(put("/api/invitations/rsvp")
+                        .header("X-Invitation-Token", invitation.rawInvitationToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"response\": \"YES\"}"))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void cancelledEventReturns409() throws Exception {
+        EventCreationResult event = createTestEvent();
+        InvitationCreationResult invitation = createTestInvitation(event);
+        eventService.cancelEvent(event.event().getId(), event.rawHostManagementToken());
+
+        mockMvc.perform(put("/api/invitations/rsvp")
+                        .header("X-Invitation-Token", invitation.rawInvitationToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"response\": \"YES\"}"))
+                .andExpect(status().isConflict());
+    }
 }

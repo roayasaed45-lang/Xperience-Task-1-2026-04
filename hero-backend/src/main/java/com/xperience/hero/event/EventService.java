@@ -9,12 +9,16 @@ import java.util.Optional;
  * Event business logic.
  *
  * Implements event creation (with host management token generation,
- * DESIGN.md Q3 — "Resolved Decisions") and the read/verification support
- * later host-only operations will need.
+ * DESIGN.md Q3 — "Resolved Decisions"), the read/verification support other
+ * host-only operations need, and the host-authorized lifecycle operations
+ * Close and Cancel (DESIGN.md Section 4, Q6/Q11/Q14 and Cancel behavior
+ * resolved): only `OPEN -> CLOSED` and `OPEN -> CANCELLED` are valid
+ * transitions — there is no reopen and no cross-transition between CLOSED
+ * and CANCELLED.
  *
- * Deliberately NOT implemented here: invitations, RSVP, capacity/waitlist,
- * dashboard, close/cancel, editing, or any invitee identity handling
- * (Q2 unresolved).
+ * Deliberately NOT implemented here: invitations, RSVP, dashboard, editing,
+ * or any invitee identity handling (Q2 is resolved elsewhere, in
+ * InvitationTokenService/RsvpService).
  */
 @Service
 public class EventService {
@@ -81,6 +85,48 @@ public class EventService {
     public void lockForCapacityDecision(Long eventId) {
         eventRepository.lockForCapacityDecision(eventId)
                 .orElseThrow(() -> new EventNotFoundException(eventId));
+    }
+
+    /**
+     * Closes an Event (DESIGN.md Section 4, Q11/Q14 resolved): only a
+     * currently-OPEN event may transition to CLOSED. Any other current
+     * status (already CLOSED, or CANCELLED) is an invalid transition — there
+     * is no reopen and no cross-transition between CLOSED and CANCELLED
+     * (Q6 resolved).
+     */
+    @Transactional
+    public Event closeEvent(Long eventId, String hostManagementToken) {
+        return transitionStatus(eventId, hostManagementToken, EventStatus.CLOSED);
+    }
+
+    /**
+     * Cancels an Event (DESIGN.md Section 4, Cancel behavior resolved): only
+     * a currently-OPEN event may transition to CANCELLED. Any other current
+     * status is an invalid transition, per the same rules as closeEvent.
+     */
+    @Transactional
+    public Event cancelEvent(Long eventId, String hostManagementToken) {
+        return transitionStatus(eventId, hostManagementToken, EventStatus.CANCELLED);
+    }
+
+    private Event transitionStatus(Long eventId, String hostManagementToken, EventStatus targetStatus) {
+        if (hostManagementToken == null || hostManagementToken.isBlank()) {
+            throw new InvalidHostTokenException();
+        }
+
+        Event event = eventRepository.findById(eventId)
+                .orElseThrow(() -> new EventNotFoundException(eventId));
+
+        if (!hostTokenService.verify(hostManagementToken, event.getHostTokenHash())) {
+            throw new InvalidHostTokenException();
+        }
+
+        if (event.getStatus() != EventStatus.OPEN) {
+            throw new InvalidEventTransitionException(event.getStatus(), targetStatus);
+        }
+
+        event.setStatus(targetStatus);
+        return eventRepository.save(event);
     }
 
     private void validate(CreateEventRequest request) {

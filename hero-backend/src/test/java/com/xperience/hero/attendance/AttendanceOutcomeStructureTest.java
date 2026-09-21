@@ -16,6 +16,10 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
  * Attendance Outcome and RSVP Response as sibling concepts under the same
  * Invitation, not parent/child — and it must not contain any capacity,
  * waitlist position, promotion, or ordering/history field.
+ *
+ * `waitlistedAt` (DESIGN.md Section 4, Q7 resolved) is the one explicitly
+ * allowed exception: it is the persisted FIFO ordering timestamp, not a
+ * position/rank column.
  */
 class AttendanceOutcomeStructureTest {
 
@@ -32,18 +36,18 @@ class AttendanceOutcomeStructureTest {
     }
 
     @Test
-    void hasNoCapacityWaitlistOrPromotionFields() {
+    void hasNoCapacityWaitlistPositionOrPromotionFields() {
         for (Field field : AttendanceOutcome.class.getDeclaredFields()) {
             String lowerName = field.getName().toLowerCase();
             boolean matchesForbidden = FORBIDDEN_SUBSTRINGS.stream().anyMatch(lowerName::contains);
             assertFalse(matchesForbidden,
-                    "AttendanceOutcome must not contain a capacity/waitlist/promotion/ordering field, found: " + field.getName());
+                    "AttendanceOutcome must not contain a capacity/waitlist-position/promotion/ordering field, found: " + field.getName());
         }
     }
 
     @Test
-    void hasExactlyIdInvitationAndOutcomeFields() {
-        assertEquals(3, AttendanceOutcome.class.getDeclaredFields().length,
-                "AttendanceOutcome should have exactly id, invitation, and outcome fields");
+    void hasExactlyIdInvitationOutcomeAndWaitlistedAtFields() {
+        assertEquals(4, AttendanceOutcome.class.getDeclaredFields().length,
+                "AttendanceOutcome should have exactly id, invitation, outcome, and waitlistedAt fields");
     }
 }

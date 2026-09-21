@@ -18,6 +18,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -50,11 +51,15 @@ class AttendanceOutcomeRepositoryTest {
         ));
         Event event = eventResult.event();
 
+        return createInvitationForEvent(event, "guest@example.com");
+    }
+
+    private Invitation createInvitationForEvent(Event event, String email) {
         String hash = invitationTokenService.hashToken(invitationTokenService.generateRawToken());
 
         return invitationRepository.save(Invitation.builder()
                 .event(event)
-                .inviteeEmail("guest@example.com")
+                .inviteeEmail(email)
                 .invitationTokenHash(hash)
                 .build());
     }
@@ -152,5 +157,84 @@ class AttendanceOutcomeRepositoryTest {
 
         assertThrows(DataIntegrityViolationException.class,
                 () -> attendanceOutcomeRepository.saveAndFlush(secondRowSameInvitation));
+    }
+
+    @Test
+    void waitlistedAtDefaultsToNull() {
+        Invitation invitation = createTestInvitation();
+
+        AttendanceOutcome saved = attendanceOutcomeRepository.save(AttendanceOutcome.builder()
+                .invitation(invitation)
+                .outcome(AttendanceOutcomeValue.CONFIRMED)
+                .build());
+
+        assertNull(attendanceOutcomeRepository.findById(saved.getId()).orElseThrow().getWaitlistedAt());
+    }
+
+    @Test
+    void persistsAndReadsBackWaitlistedAt() {
+        Invitation invitation = createTestInvitation();
+        LocalDateTime waitlistedAt = LocalDateTime.now().withNano(0);
+
+        AttendanceOutcome saved = attendanceOutcomeRepository.save(AttendanceOutcome.builder()
+                .invitation(invitation)
+                .outcome(AttendanceOutcomeValue.WAITLISTED)
+                .waitlistedAt(waitlistedAt)
+                .build());
+
+        assertEquals(waitlistedAt, attendanceOutcomeRepository.findById(saved.getId()).orElseThrow().getWaitlistedAt());
+    }
+
+    @Test
+    void findsFirstWaitlistedByEventOrderedByWaitlistedAtThenInvitationId() {
+        EventCreationResult eventResult = eventService.createEvent(new CreateEventRequest(
+                "Team Offsite", "Quarterly planning session", LocalDateTime.now().plusDays(7), "Main Office", 1
+        ));
+        Event event = eventResult.event();
+
+        Invitation later = createInvitationForEvent(event, "later@example.com");
+        Invitation earlier = createInvitationForEvent(event, "earlier@example.com");
+
+        LocalDateTime now = LocalDateTime.now();
+        attendanceOutcomeRepository.save(AttendanceOutcome.builder()
+                .invitation(later)
+                .outcome(AttendanceOutcomeValue.WAITLISTED)
+                .waitlistedAt(now.plusMinutes(5))
+                .build());
+        attendanceOutcomeRepository.save(AttendanceOutcome.builder()
+                .invitation(earlier)
+                .outcome(AttendanceOutcomeValue.WAITLISTED)
+                .waitlistedAt(now)
+                .build());
+
+        Optional<AttendanceOutcome> first = attendanceOutcomeRepository
+                .findFirstByInvitation_EventAndOutcomeOrderByWaitlistedAtAscInvitation_IdAsc(
+                        event, AttendanceOutcomeValue.WAITLISTED);
+
+        assertTrue(first.isPresent());
+        assertEquals(earlier.getId(), first.get().getInvitation().getId());
+    }
+
+    @Test
+    void findFirstWaitlistedScopedToOneEventOnly() {
+        EventCreationResult eventAResult = eventService.createEvent(new CreateEventRequest(
+                "Event A", null, LocalDateTime.now().plusDays(7), "Main Office", 1
+        ));
+        EventCreationResult eventBResult = eventService.createEvent(new CreateEventRequest(
+                "Event B", null, LocalDateTime.now().plusDays(7), "Main Office", 1
+        ));
+
+        Invitation invitationOnEventB = createInvitationForEvent(eventBResult.event(), "guest@example.com");
+        attendanceOutcomeRepository.save(AttendanceOutcome.builder()
+                .invitation(invitationOnEventB)
+                .outcome(AttendanceOutcomeValue.WAITLISTED)
+                .waitlistedAt(LocalDateTime.now())
+                .build());
+
+        Optional<AttendanceOutcome> firstForEventA = attendanceOutcomeRepository
+                .findFirstByInvitation_EventAndOutcomeOrderByWaitlistedAtAscInvitation_IdAsc(
+                        eventAResult.event(), AttendanceOutcomeValue.WAITLISTED);
+
+        assertEquals(Optional.empty(), firstForEventA);
     }
 }
