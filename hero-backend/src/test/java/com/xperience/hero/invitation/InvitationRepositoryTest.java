@@ -7,6 +7,7 @@ import com.xperience.hero.event.EventService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
@@ -19,11 +20,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Tests the Invitation persistence foundation only: structural fields and
- * the required Event relationship (I7/I8). Deliberately does NOT test any
- * creation workflow or duplicate-invitation behavior — DESIGN.md Q8 remains
- * unresolved, and no test here creates more than one Invitation for the
- * same (event, email) pair or asserts what should happen if one did.
+ * Tests the Invitation persistence foundation: structural fields, the
+ * required Event relationship (I7/I8), and the UNIQUE(event_id,
+ * invitee_email) database constraint (Q8/I13) — proven here at the
+ * repository level, independent of any service-layer pre-check, since the
+ * database constraint (not the pre-check) is the authoritative guard.
  */
 @SpringBootTest
 @Transactional
@@ -97,5 +98,50 @@ class InvitationRepositoryTest {
         // what rejects this is an implementation detail — the structural
         // guarantee under test is only that it IS rejected somehow (I7/I8).
         assertThrows(Exception.class, () -> invitationRepository.saveAndFlush(invitation));
+    }
+
+    @Test
+    void enforcesUniqueConstraintOnEventAndNormalizedEmail() {
+        Event event = createTestEvent();
+        String email = "duplicate@example.com";
+
+        invitationRepository.saveAndFlush(Invitation.builder()
+                .event(event)
+                .inviteeEmail(email)
+                .invitationTokenHash(invitationTokenService.hashToken(invitationTokenService.generateRawToken()))
+                .build());
+
+        Invitation secondAttempt = Invitation.builder()
+                .event(event)
+                .inviteeEmail(email)
+                .invitationTokenHash(invitationTokenService.hashToken(invitationTokenService.generateRawToken()))
+                .build();
+
+        // Proven directly at the repository level, bypassing any service
+        // pre-check entirely, to demonstrate the database constraint itself
+        // is what's authoritative (Q8/I13) — not application logic.
+        assertThrows(DataIntegrityViolationException.class,
+                () -> invitationRepository.saveAndFlush(secondAttempt));
+    }
+
+    @Test
+    void allowsSameEmailAcrossDifferentEvents() {
+        Event firstEvent = createTestEvent();
+        Event secondEvent = createTestEvent();
+        String email = "shared@example.com";
+
+        invitationRepository.saveAndFlush(Invitation.builder()
+                .event(firstEvent)
+                .inviteeEmail(email)
+                .invitationTokenHash(invitationTokenService.hashToken(invitationTokenService.generateRawToken()))
+                .build());
+
+        Invitation onSecondEvent = invitationRepository.saveAndFlush(Invitation.builder()
+                .event(secondEvent)
+                .inviteeEmail(email)
+                .invitationTokenHash(invitationTokenService.hashToken(invitationTokenService.generateRawToken()))
+                .build());
+
+        assertNotNull(onSecondEvent.getId());
     }
 }

@@ -11,6 +11,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -29,17 +30,28 @@ import lombok.Setter;
  * Deliberately NOT represented here: RSVP Response, Attendance Outcome, or
  * any waitlist/confirmed state (all separate concepts per DESIGN.md Section
  * 8, not implemented in this slice); token expiry (Q9, unresolved); any
- * invitee account/authentication model (Q2, unresolved). There is also no
- * uniqueness constraint on (event, inviteeEmail) — whether duplicate
- * invitations to the same email are allowed is unresolved (Q8); this is not
- * silently decided by the schema.
+ * invitee account/authentication model (Q2, unresolved).
+ *
+ * DESIGN.md Q8/I13 are resolved: an Event must not have more than one
+ * Invitation for the same normalized invitee email. This is enforced
+ * authoritatively by the UNIQUE(event_id, invitee_email) database
+ * constraint below — not merely by an application-level pre-check —
+ * because only the database constraint is safe under concurrent requests.
+ * inviteeEmail is expected to already be normalized (trimmed, lowercased
+ * with Locale.ROOT) before being set here; see InvitationService.
  *
  * The invitation token is a completely separate concept from the event's
  * host management token (DESIGN.md Q3) — see InvitationTokenService, which
  * shares no code with HostTokenService.
  */
 @Entity
-@Table(name = "invitations")
+@Table(
+        name = "invitations",
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_invitation_event_email",
+                columnNames = {"event_id", "invitee_email"}
+        )
+)
 @Getter
 @Setter
 @NoArgsConstructor
