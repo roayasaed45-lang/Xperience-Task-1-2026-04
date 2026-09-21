@@ -73,12 +73,13 @@ All ten behavioral facts from the README (event creation fields, host assignment
 | A4 | Each event has exactly one host | Needed for ownership model | Ownership/authorization model changes (Q4) |
 | A5 | Close and Cancel are permanent, one-way transitions | Needed to define the event lifecycle | State machine needs extra transitions (Q6) |
 | A6 | Waitlist ordering is FIFO | Needed to define promotion | Promotion selection logic changes (Q7) |
-| A7 | One invitee email = at most one RSVP per event | Needed for capacity/attendee-count correctness | Counting semantics change (Q8) |
 | A8 | The RSVP design will not depend on or reuse the unrelated bulk-messaging / `wasender` code unless repository intent is clarified | Needed to scope the feature without presuming what happens to unrelated code | N/A — this is a non-dependence stance, not a prediction; repository cleanup/removal itself remains unresolved |
 
 **Note on A3 and A6:** both remain working assumptions only, not settled decisions. A3 is used only to let invitee workflows proceed; the final invitee identity model is unresolved (Q2). A6 is used only to let promotion logic proceed; the final waitlist ordering policy is unresolved (Q7).
 
 **Note on former A1:** the working assumption "Host is some identifiable entity with authorization rights over their event" has been **superseded** by the resolved decision below (Q3) and is no longer a separate open assumption.
+
+**Note on former A7:** the working assumption "One invitee email = at most one RSVP per event" has been **superseded** by the resolved decision below (Q8) and is no longer a separate open assumption. The resolved rule is more precise than A7 was: uniqueness is per Event and per *normalized* email, not a bare assumption about "one RSVP."
 
 ### Resolved Decisions
 
@@ -103,6 +104,25 @@ All ten behavioral facts from the README (event creation fields, host assignment
 - **Not decided by this resolution:** whether Attendance Outcome is enforced as exactly one row per Invitation at the schema level, and how updates/history are represented there. That remains an implementation-time schema question, addressed only if and when it is strictly required by this conceptual relationship — see Section 8.
 - **Not resolved by this decision:** Q1 (does Maybe count toward capacity), Q2 (invitee identity), Q7 (waitlist ordering), Q13 (promotion trigger scope), or RSVP history/update-in-place behavior. None of these are touched here.
 
+**Q8 — Duplicate invitations to the same email: one Invitation per Event per normalized email**
+
+- There may be only one Invitation per Event for the same **normalized** invitee email.
+- **Normalization for this first-pass implementation:** trim surrounding whitespace, then lowercase using a locale-independent approach (e.g., `" Guest@Example.com "` → `"guest@example.com"`).
+- A host may not create a second Invitation for the same normalized email within the same Event — a duplicate attempt must be **rejected**, not silently merged, and must not create another Invitation.
+- The existing Invitation's token must **not** be rotated, regenerated, or overwritten as a side effect of a rejected duplicate attempt — the original invitation/token relationship (I7) is preserved untouched.
+- Invitations for the same email across **different** Events remain allowed — this uniqueness rule is scoped per Event, not global.
+- **Rationale:** prevents duplicate RSVP identities for the same invitee within one event, avoids duplicate dashboard rows and capacity-counting ambiguity, preserves the existing invitation token relationship, and avoids introducing any token rotation/recovery behavior (which remains unaddressed, per Q9).
+- **Not resolved by this decision:** Q1, Q2, Q7, Q9 (token expiry), Q13. Email format validation beyond trim+lowercase normalization is not addressed.
+
+**I13 concurrency-enforcement mechanism: database UNIQUE constraint**
+
+- Invitation uniqueness (I13, Q8) is enforced **authoritatively by a database UNIQUE constraint** on `(event_id, invitee_email)`, where `invitee_email` is already normalized (trim + locale-independent lowercase) before persistence.
+- The application service **may** perform a pre-check for an existing Invitation before attempting the insert, purely to provide a clearer, friendlier duplicate-invitation error to the caller — but this pre-check is **not** the authoritative enforcement; it is a best-effort convenience only.
+- **The database constraint is what actually prevents the violation.** If two concurrent requests both pass the service pre-check (a real possibility, since the pre-check and the insert are not atomic with each other), only one INSERT may succeed; the constraint rejects the second.
+- The losing request's constraint violation must be translated into a duplicate-invitation **application error** — not surfaced as a raw database exception, and not silently swallowed.
+- **Explicitly not used:** relying on check-then-insert alone (insufficient under concurrency, as the pre-existing "Duplicate Invitation Race" analysis showed); a global lock; per-event pessimistic locking introduced specifically for this invariant (the per-event locking used elsewhere for capacity, per Section 10's First-Pass Concurrency Decision, is a separate mechanism for a separate invariant and is not extended to cover I13).
+- **Not resolved by this decision:** Q1, Q2, Q7, Q9, Q13, Q14 — untouched. The exact application-error type/shape returned to the caller on a constraint violation is an implementation-time detail, not decided here.
+
 ### Open Questions
 
 | ID | Question | Why it matters |
@@ -112,7 +132,6 @@ All ten behavioral facts from the README (event creation fields, host assignment
 | Q4 | Can an event have more than one host? | Affects ownership and authorization; blocks the final ownership/scope model |
 | Q6 | Can a closed/cancelled event be reopened? | Affects the event lifecycle state machine |
 | Q7 | What is the waitlist ordering policy? | Determines who is promoted first |
-| Q8 | Are duplicate invitations to the same email allowed? | Affects capacity/attendee-count correctness |
 | Q9 | Do invitation links expire? | Affects link security lifetime |
 | Q11 | What exactly distinguishes "Cancelled" from "Closed"? | Needed to fully specify I5 and W13 |
 | Q12 | What timezone rules apply to event start time? | Affects exactly when lock-after-start (I2) triggers |
@@ -142,7 +161,7 @@ No other human actors exist. Capacity evaluation, waitlist promotion, and RSVP l
 | Workflow | Actor/Initiator | Trigger | Preconditions | Major Steps | State Changes | Dependencies | Failure/Blocked Path | Related Open Items |
 |---|---|---|---|---|---|---|---|---|
 | Event creation | Host | Host decides to create an event | None stated | Provide fields → submit | Event exists; creator = host; a host management token is generated and stored in the same transaction (I8, Q3 resolved) | None (entry point) | Missing/invalid fields not specified | Q4 |
-| Invitation | Host | Host invites by email | Event exists; valid host management token for this event presented | Provide email → unique link created | New Invitation exists, unanswered | Depends on Event creation | Duplicate invite / invite-after-close not specified | A7, Q8 |
+| Invitation | Host | Host invites by email | Event exists; valid host management token for this event presented; no existing Invitation for the same normalized email on this Event (Q8 resolved) | Normalize email → optional service pre-check → attempt insert → database UNIQUE constraint on (event_id, invitee_email) authoritatively rejects a duplicate → unique link created only on success | New Invitation exists, unanswered (on success); no state change on a rejected duplicate | Depends on Event creation | Invite-after-close not specified; duplicate invite is now specified: rejected via DB constraint, surfaced as a duplicate-invitation application error (Q8/I13 resolved) | — |
 | RSVP submission | Invitee | Invitee opens link, responds | Valid link; event open; not started | Select Yes/No/Maybe → submit | Response set; if Yes, triggers Capacity Evaluation | Depends on Invitation | Blocked if locked/closed/cancelled | A2, A3, Q1 |
 | RSVP change | Invitee | Invitee revisits link, changes response | Event not started | Select new response → submit | Response changes; may trigger Capacity Evaluation or Promotion | Depends on prior RSVP submission | Blocked after start (I2) | Q13, Q14 |
 | Dashboard | Host | Host opens dashboard | Valid host management token for this event presented | View counts + attendee list | None (read-only) | Depends on Event creation; reflects RSVP/Promotion state | Not specified for cancelled events | "Live" definition unresolved |
@@ -177,8 +196,9 @@ No new human actor is introduced by this table — "System" denotes automatic ba
 | Name | Statement | Break Scenario | Trigger | Workflows Affected | Protection Note | Source |
 |---|---|---|---|---|---|---|
 | I6 RSVP Value | Response must be exactly Yes/No/Maybe, distinct from Attendance Outcome | Value outside the set, or Response/Outcome conflated | Unrestricted input, or missing separation | RSVP submission/change, Capacity Evaluation | Input constraint + conceptual separation; both concepts are sibling state scoped to the same Invitation, not parent/child (Resolved Decision — Section 4) | Fact + Resolved Decision (Attendance Outcome ownership — Section 4) |
-| I7 Invitation Scope | A link must correspond to exactly the correct invitation/event | Link resolves to wrong invitee/event | Weak binding | Invitation, RSVP submission/change, invalid link | Not specified — mechanism unresolved | Fact + Open Questions (Q8, Q9) |
+| I7 Invitation Scope | A link must correspond to exactly the correct invitation/event | Link resolves to wrong invitee/event | Weak binding | Invitation, RSVP submission/change, invalid link | Not specified — mechanism unresolved | Fact + Open Question (Q9) |
 | I8 Host/Event Ownership | Every event has its creator recorded as host | Event with no/incorrect host, or an event with no host management token | Creation path skips assignment or token generation | Event creation | Host assignment and host management token generation occur in the same transaction as event creation | Fact + Resolved Decision (Host Management Token — Section 4) |
+| I13 Invitation Uniqueness | An Event must not have more than one Invitation for the same normalized invitee email | Two Invitations exist for the same Event with the same normalized email | Concurrent or repeated invite attempts for the same email on the same Event | Invitation | Authoritatively enforced by a database UNIQUE constraint on (event_id, invitee_email), with invitee_email normalized (trim + locale-independent lowercase) before persistence; a service-layer pre-check provides a clearer error but is not itself the enforcement mechanism; existing Invitation/token must not be rotated or overwritten | Fact + Resolved Decision (Q8 policy + concurrency mechanism resolved — Section 4/10) |
 
 ### Authorization Invariants
 
@@ -258,7 +278,7 @@ RSVP Response and Attendance Outcome are **sibling state concepts scoped to the 
 | Host ownership | PostgreSQL | Business Logic, at creation, in the same transaction as host management token generation | Business Logic (I9) | None | Assigned once; whether an event may have more than one host is unresolved (Q4) |
 | Host management token | PostgreSQL | Business Logic, generated exactly once at event creation — never client-supplied, never regenerated in this first-pass model | Business Logic, to authorize host-only operations (I9) | None — a stored, backend-generated random value | Created in the same transaction as the event and host assignment (I8); distinct from the invitee's invitation token (I7) — the host token authorizes managing the whole event, the invitation token scopes one invitee's RSVP; recovery/rotation if lost is out of scope for this first-pass model (Q3) |
 | Event lifecycle/status | PostgreSQL | Business Logic, via Close/Cancel | Business Logic, Frontend | "Start reached" is derived from stored start time, not stored | Open→Closed/Cancelled known; reverse transitions unresolved (Q6, Q11) |
-| Invitation | PostgreSQL | Business Logic, on invite | Business Logic, Delivery Boundary | None | Duplicate policy (Q8) and expiry (Q9) unresolved |
+| Invitation | PostgreSQL | Business Logic, on invite | Business Logic, Delivery Boundary | None | At most one Invitation per Event per normalized (trimmed, lowercased) invitee email (I13, Q8 resolved — Section 4); duplicate attempts are rejected, not merged, and never rotate the existing token. Expiry (Q9) remains unresolved |
 | RSVP Response (Yes/No/Maybe) | PostgreSQL | Business Logic, only on invitee request, subject to I2/I4/I5 | Business Logic, invitee's own view, host dashboard | None | Belongs to exactly one Invitation; sibling to Attendance Outcome, not its parent (see relationship note above). See RSVP Lifecycle below |
 | Attendance Outcome (Confirmed/Waitlisted/None) | PostgreSQL | Business Logic only (never invitee/frontend) | Business Logic, invitee's own view, host dashboard | Derived from Response + capacity state, then persisted | Belongs to exactly one Invitation (Resolved Decision — Section 4); sibling to RSVP Response, not owned by or keyed off any specific RsvpResponse row. None→Confirmed/Waitlisted; Waitlisted→Confirmed on promotion. Whether one-row-per-Invitation is DB-enforced, and how history/updates are represented, is not decided |
 | Waitlist ordering | Likely derivable from entry order (FIFO working assumption, A6 — unresolved, Q7) | Business Logic, on promotion | Business Logic | Likely derived, not separately stored | Ordering policy unresolved (Q7) |
@@ -324,9 +344,12 @@ No full authentication framework (e.g., Spring Security), session mechanism, Use
 | Cancel vs RSVP Race | Cancel vs. RSVP submission/change | Stale lifecycle state | Inconsistent evaluation near cancellation | I5 | Re-read authoritative status at write time; outcome unresolved (Q11) |
 | Partial Database Failure | Event creation, Invitation creation, RSVP+Outcome, Promotion | Multi-part write partially succeeds | Response without Outcome; Invitation without token; Event without host or without a generated host management token | I6, I7, I8, I3 | Each causally-linked pair in one transaction |
 | External Invitation Delivery Side Effect | Invitation | External call not transactional with DB | Delivery failure or DB failure after send | I7 | Invitation validity determined solely by PostgreSQL, never delivery outcome |
+| Duplicate Invitation Race (Resolved) | Invitation | Check-then-insert race | Two concurrent invite requests for the same normalized email on the same Event both pass an optional service pre-check | I13 | **Resolved:** a database UNIQUE constraint on (event_id, invitee_email), not the pre-check, is the authoritative enforcement — only one of the two concurrent INSERTs succeeds; the losing request's constraint violation is translated into a duplicate-invitation application error. No global lock and no per-event pessimistic locking are used for this invariant |
 
 ### First-Pass Concurrency Decision
 **Current choice:** a per-event pessimistic/serialized correctness boundary around the capacity decision. **This simplifies correctness reasoning only when every capacity-changing path uses the same protected boundary — locking alone does not automatically guarantee correctness if any path bypasses it.** Optimistic version-based concurrency remains a reasonable later alternative if contention becomes a measured concern; it is not chosen now, for simplicity and explainability.
+
+This per-event locking mechanism is specific to the capacity/waitlist invariants (I1, I11, I12) and is **not** extended to Invitation uniqueness (I13), which uses a separate, unrelated mechanism — a database UNIQUE constraint (see the Duplicate Invitation Race row above and Section 4). The two are independent design decisions for two different invariants, not one general concurrency strategy.
 
 ### Transaction Boundaries
 Five causally-linked write groups must succeed/fail together: (1) Response + capacity decision + Outcome — both Response and Outcome are written for the same Invitation, as sibling state, not as a write to a shared row, (2) Confirmed→No + promotion, (3) Event creation + host assignment + host management token generation (I8 — the token is generated in the same transaction as the event and its host assignment, never after the fact), (4) Invitation creation + token relationship, (5) Close/Cancel state check-then-write.
@@ -336,7 +359,7 @@ Five causally-linked write groups must succeed/fail together: (1) Response + cap
 2. At most one invitee can claim the final confirmed spot (mechanism-dependent only).
 3. Waitlist promotion cannot promote the same attendee twice (depends on Q7).
 4. RSVP changes after event start are rejected (depends on Q12).
-5. One invitation must not create conflicting authoritative RSVP state (depends on Q8).
+5. One Event must not have more than one Invitation for the same normalized email (I13, Q8 resolved) — enforced authoritatively by a database UNIQUE constraint on (event_id, invitee_email); this guarantee holds regardless of application-level races, since the constraint (not the service pre-check) is what's authoritative.
 6. Partial database failures must not leave state inconsistent (mechanism-dependent only).
 7. Client/frontend state is never authoritative for concurrency decisions (settled principle).
 8. Display staleness must never become business-state staleness (settled principle).
@@ -383,15 +406,15 @@ Same as Section 9 — required regardless of tenancy: one host cannot manage ano
 | Stale dashboard data | Host sees outdated counts | Derived read, another RSVP changes after | Acceptable if never reused for capacity decisions |
 | **Invitation delivery failure** | Email not delivered | External dependency, not transactional with DB | Invitation validity stays PostgreSQL-determined |
 | Wrong recipient / invitation pairing | Link sent to wrong person | Sensitive pairing error | Backend must construct pairing correctly before handoff |
-| Duplicate invitation ambiguity | Duplicate invitation state | Q8 unresolved | Uniqueness rule deferred until Q8 decided |
+| **Duplicate invitation attempt** | A second Invitation for the same normalized email on the same Event | Concurrent or repeated invite requests; a service-only pre-check would not be safe under concurrency | **Resolved:** a database UNIQUE constraint on (event_id, invitee_email) is the authoritative guard (I13); the losing concurrent request's constraint violation is translated into a duplicate-invitation application error, never a raw DB exception and never silently ignored |
 | Email/token logging exposure | Invitation token, host management token, or email leaks via logs | Both token types are credential-equivalent (A3 for invitation tokens; the Host Management Token decision for host tokens) | Avoid ordinary logging of raw tokens of either kind |
 | PostgreSQL unavailable | All core workflows fail | Sole authoritative store, no fallback | Fail honestly; frontend never becomes truth |
 | External invitation provider unavailable | Email delivery fails | Separate external system availability | Core RSVP/event state unaffected (decoupled) |
 | **Repository mismatch risk** | Implementation built on wrong assumptions | React version mismatch, unrelated scaffold code | Kept visible as cleanup decisions, not resolved |
 
-**Assumption Failure Risks:** if A2, A3, A4, A6, or A7 turn out false, the capacity logic, invitee trust model, ownership model, promotion logic, or capacity/attendee-counting semantics respectively would need to change (see Section 4 for each assumption's dependency).
+**Assumption Failure Risks:** if A2, A3, A4, or A6 turn out false, the capacity logic, invitee trust model, ownership model, or promotion logic respectively would need to change (see Section 4 for each assumption's dependency). (Former A7 is resolved, not an assumption — see Section 4.)
 
-None of the unresolved product questions above (Q1, Q4, Q6–Q9, Q11–Q14) are treated as bugs — they are explicit open decisions, not defects. (Q3 is now resolved — see Section 4.)
+None of the unresolved product questions above (Q1, Q4, Q6, Q7, Q9, Q11–Q14) are treated as bugs — they are explicit open decisions, not defects. (Q3 and Q8 are now resolved — see Section 4.)
 
 ---
 
@@ -409,7 +432,8 @@ None of the unresolved product questions above (Q1, Q4, Q6–Q9, Q11–Q14) are 
 | **Host identity** | **Chosen (first-pass)** | Host Management Token — the backend generates a cryptographically random, unguessable token at event creation, in the same transaction as host assignment; the client must present it for host-only operations. No User entity, login, password, JWT, or Spring Security setup. Explicitly a first-pass authorization mechanism, not a full account system; token recovery/rotation is out of scope, and multi-host support (Q4) remains separately unresolved |
 | **Multiple hosts** | **Unresolved** | Whether an event may have more than one host is not decided (Q4); single-host is used only as a working assumption (A4) |
 | **Waitlist ordering** | **Working assumption; ordering policy unresolved** | FIFO (A6) is used as the simplest interpretation of "automatically," but the actual policy is **not decided** (Q7) |
-| **Duplicate invitation policy** | **Deferred / unresolved (Q8)** | The task does not specify whether the same email may receive more than one invitation for the same event. Disallowing duplicates simplifies RSVP/capacity identity and counting but requires an explicit uniqueness rule; allowing duplicates is more flexible but requires explicit semantics for capacity and attendee counting. **Not decided here.** |
+| **Duplicate invitation policy** | **Chosen** | At most one Invitation per Event per normalized (trimmed, lowercased) email (I13, Q8 resolved). A duplicate attempt is rejected outright — never merged into the existing Invitation, and never causes the existing token to be rotated/regenerated/overwritten. Invitations for the same email across different Events remain allowed. Chosen over allowing duplicates because it avoids capacity/attendee-counting ambiguity and duplicate dashboard rows |
+| **Invitation uniqueness concurrency mechanism** | **Chosen** | A database UNIQUE constraint on (event_id, invitee_email), over relying on check-then-insert alone, a global lock, or per-event pessimistic locking. Chosen because it is authoritative regardless of application-level races, requires no lock contention, and doesn't extend the capacity-specific per-event locking mechanism (I1/I11/I12) to an unrelated invariant. A service-layer pre-check is retained only as a best-effort convenience for a clearer error message, not as the enforcement itself |
 | Invitation delivery execution | **Deferred / unresolved** | Neither synchronous nor asynchronous delivery is chosen |
 | Event lifecycle representation | **Chosen (representation only)** | A single lifecycle status + derived start-lock, to make contradictory states harder to represent — this decides *how state is stored*, not *what Close/Cancel mean* (Q11 remains separately open) |
 | Single-service architecture | **Chosen** | One Spring Boot application, matching the existing stack and supporting single-transaction correctness; no distributed services justified |
@@ -441,7 +465,7 @@ A safe incremental order, following design dependencies:
 **"Implemented" does not mean "safe to expose."** Host-only workflows built in step 2 (invite, dashboard) and Close/Cancel in step 3 must not be exposed to real users until the host management token check is actually implemented and enforced in code (Q3 is resolved at the design level, but that is not the same as being enforced); invitee-facing RSVP workflows must not be exposed before Q2 is resolved; capacity-sensitive RSVP submission must not be exposed before step 3's concurrency controls are actually implemented, not just designed.
 
 ### Rollout Dependencies / Blockers
-Host-only workflows (invite/dashboard/close/cancel) can now proceed once the host management token mechanism (Q3, resolved) is implemented and correctly enforced. Q2 (invitee identity) blocks the final security design for RSVP submit/change. Q4 (multiple hosts) blocks the final ownership/scope model. Q7 blocks deterministic promotion. Q1 blocks the final capacity rule. Q11 blocks final lifecycle behavior. Q12 blocks final lock-after-start correctness. Q8 blocks the final uniqueness rule. The delivery execution model blocks final delivery integration.
+Host-only workflows (invite/dashboard/close/cancel) can now proceed once the host management token mechanism (Q3, resolved) is implemented and correctly enforced. The invitation uniqueness rule and its concurrency-safe enforcement mechanism (Q8/I13, both resolved) can now be implemented in full — a database UNIQUE constraint on (event_id, invitee_email), with the losing concurrent request translated into a duplicate-invitation application error. Q2 (invitee identity) blocks the final security design for RSVP submit/change. Q4 (multiple hosts) blocks the final ownership/scope model. Q7 blocks deterministic promotion. Q1 blocks the final capacity rule. Q11 blocks final lifecycle behavior. Q12 blocks final lock-after-start correctness. The delivery execution model blocks final delivery integration.
 
 ### Existing Repository Coexistence
 Leaving the unrelated bulk-messaging code in place risks confusion/accidental coupling; removing it risks deleting something intentionally retained. **Deferred until repository intent is clarified** — not silently deleted or reused.
@@ -469,7 +493,6 @@ Before considering the feature complete, verify: host authorization (I9), invite
 | Q4 | Can an event have more than one host? | Affects ownership and authorization | Final ownership/scope model |
 | Q6 | Can a closed/cancelled event be reopened? | Affects the event lifecycle state machine | Final lifecycle transitions |
 | Q7 | What is the waitlist ordering policy? | Determines who is promoted first | Deterministic promotion (I3, I12) |
-| Q8 | Are duplicate invitations to the same email allowed? | Affects capacity/attendee-count correctness | Final uniqueness rule |
 | Q9 | Do invitation links expire? | Affects link security lifetime | Invitee-link trust risk mitigation |
 | Q11 | What exactly distinguishes Cancelled from Closed? | Needed to fully specify I5 and W13 | Final event lifecycle behavior |
 | Q12 | What timezone rules apply to event start time? | Affects exactly when I2 (lock) triggers | Final lock-after-start correctness |
@@ -485,3 +508,5 @@ Each question above appears exactly once in this table and is not contradicted b
 **Q3 (host authentication/identity) has been resolved** via the Host Management Token decision (see Section 4, "Resolved Decisions") and is intentionally no longer listed here. It is removed from this table rather than marked "resolved" in place, so that this table continues to represent only genuinely open questions.
 
 **The Attendance Outcome ownership relationship (Invitation vs. RsvpResponse) has been resolved**: Attendance Outcome belongs to the Invitation, as a sibling state concept to RSVP Response (see Section 4, "Resolved Decisions," and Section 8). This question surfaced during implementation and was never listed as a numbered Q item, so no row is removed here — it is noted for traceability only. Q1, Q2, Q7, Q13, and RSVP history/update-in-place behavior remain untouched by this resolution and are still listed above.
+
+**Q8 (duplicate invitations) has been resolved**: at most one Invitation per Event per normalized (trimmed, lowercased) email; duplicate attempts are rejected, never merged, and never rotate the existing token (see Section 4, "Resolved Decisions," I13, and Section 13). It is removed from this table rather than marked "resolved" in place, consistent with how Q3 was handled. **The concurrency-safe enforcement mechanism (I13) is now also resolved**: a database UNIQUE constraint on (event_id, invitee_email) is authoritative; a service-layer pre-check is a best-effort convenience only; the losing concurrent request is translated into a duplicate-invitation application error. No global lock and no per-event pessimistic locking are used for this invariant (see Section 4, Section 10's "Duplicate Invitation Race (Resolved)," and Section 13).
