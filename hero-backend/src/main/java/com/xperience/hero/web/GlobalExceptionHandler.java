@@ -1,5 +1,6 @@
 package com.xperience.hero.web;
 
+import com.xperience.hero.dashboard.AmbiguousInvitationStateException;
 import com.xperience.hero.event.EventNotFoundException;
 import com.xperience.hero.event.InvalidHostTokenException;
 import com.xperience.hero.invitation.DuplicateInvitationException;
@@ -36,5 +37,15 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(DuplicateInvitationException.class)
     public ResponseEntity<ErrorResponse> handleDuplicateInvitation(DuplicateInvitationException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(new ErrorResponse(ex.getMessage()));
+    }
+
+    /**
+     * A genuine server-side data-state ambiguity (DESIGN.md Section 8 —
+     * not decided), not a client error — mapped to 500 with a safe message
+     * rather than letting a raw exception/stack trace escape.
+     */
+    @ExceptionHandler(AmbiguousInvitationStateException.class)
+    public ResponseEntity<ErrorResponse> handleAmbiguousInvitationState(AmbiguousInvitationStateException ex) {
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(new ErrorResponse(ex.getMessage()));
     }
 }

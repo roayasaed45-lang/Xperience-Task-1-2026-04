@@ -3,6 +3,7 @@ package com.xperience.hero.invitation;
 import com.xperience.hero.event.Event;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.util.List;
 import java.util.Optional;
 
 public interface InvitationRepository extends JpaRepository<Invitation, Long> {
@@ -15,4 +16,7 @@ public interface InvitationRepository extends JpaRepository<Invitation, Long> {
      * The caller is responsible for passing an already-normalized email.
      */
     Optional<Invitation> findByEventAndInviteeEmail(Event event, String inviteeEmail);
+
+    /** All Invitations for one Event — used by the host dashboard (read-only). */
+    List<Invitation> findByEvent(Event event);
 }
