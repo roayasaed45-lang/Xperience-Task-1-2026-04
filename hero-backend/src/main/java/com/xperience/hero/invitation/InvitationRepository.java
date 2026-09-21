@@ -19,4 +19,12 @@ public interface InvitationRepository extends JpaRepository<Invitation, Long> {
 
     /** All Invitations for one Event — used by the host dashboard (read-only). */
     List<Invitation> findByEvent(Event event);
+
+    /**
+     * Resolves the Invitation for a caller-presented invitation token
+     * (DESIGN.md Q2 — resolved). The caller must hash the raw token via
+     * InvitationTokenService before calling this; the raw token itself is
+     * never looked up directly and never persisted.
+     */
+    Optional<Invitation> findByInvitationTokenHash(String invitationTokenHash);
 }

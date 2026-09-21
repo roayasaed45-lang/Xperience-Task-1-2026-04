@@ -12,6 +12,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -32,19 +33,17 @@ import lombok.Setter;
  * result, waitlist position, or promotion state — all belong to future
  * capacity/waitlist logic, not implemented in this slice.
  *
- * Relationship note: the association below is a plain @ManyToOne with no
- * uniqueness constraint on invitation_id. Whether an Invitation may
- * legitimately have more than one RsvpResponse row, or whether a "change"
- * must update an existing row in place, is a service-layer/workflow
- * decision — deferred along with the rest of RSVP submission/change, since
- * building that workflow now would require resolving duplicate-request
- * behavior, I2 lock-after-start enforcement, and invitee scoping (I10/Q2),
- * none of which are settled. This entity's shape does not decide any of
- * that; it only records that a given response value belongs to a given
- * invitation.
+ * DESIGN.md's current-state persistence model (Section 4/8, Resolved
+ * Decision) is now settled: each Invitation has exactly one current
+ * RsvpResponse row, enforced by UNIQUE(invitation_id) below. A "change"
+ * updates this row in place — RsvpService never inserts a second row for
+ * the same Invitation. This is current-state only, not history.
  */
 @Entity
-@Table(name = "rsvp_responses")
+@Table(
+        name = "rsvp_responses",
+        uniqueConstraints = @UniqueConstraint(name = "uk_rsvp_response_invitation", columnNames = {"invitation_id"})
+)
 @Getter
 @Setter
 @NoArgsConstructor

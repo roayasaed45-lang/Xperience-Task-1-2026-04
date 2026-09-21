@@ -4,6 +4,9 @@ import com.xperience.hero.dashboard.AmbiguousInvitationStateException;
 import com.xperience.hero.event.EventNotFoundException;
 import com.xperience.hero.event.InvalidHostTokenException;
 import com.xperience.hero.invitation.DuplicateInvitationException;
+import com.xperience.hero.invitation.InvalidInvitationTokenException;
+import com.xperience.hero.rsvp.EventClosedException;
+import com.xperience.hero.rsvp.RsvpLockedException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -47,5 +50,20 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AmbiguousInvitationStateException.class)
     public ResponseEntity<ErrorResponse> handleAmbiguousInvitationState(AmbiguousInvitationStateException ex) {
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(new ErrorResponse(ex.getMessage()));
+    }
+
+    @ExceptionHandler(InvalidInvitationTokenException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidInvitationToken(InvalidInvitationTokenException ex) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(new ErrorResponse(ex.getMessage()));
+    }
+
+    @ExceptionHandler(RsvpLockedException.class)
+    public ResponseEntity<ErrorResponse> handleRsvpLocked(RsvpLockedException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(new ErrorResponse(ex.getMessage()));
+    }
+
+    @ExceptionHandler(EventClosedException.class)
+    public ResponseEntity<ErrorResponse> handleEventClosed(EventClosedException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(new ErrorResponse(ex.getMessage()));
     }
 }

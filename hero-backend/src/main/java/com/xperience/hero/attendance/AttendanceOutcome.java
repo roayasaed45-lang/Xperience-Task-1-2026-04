@@ -12,6 +12,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -29,20 +30,23 @@ import lombok.Setter;
  * derived from the current Response plus capacity state (a computation
  * relationship, not a storage/ownership one).
  *
- * Relationship note: the association below is a plain @ManyToOne with no
- * uniqueness constraint on invitation_id, mirroring RsvpResponse. DESIGN.md
- * explicitly leaves open whether "one current Attendance Outcome per
- * Invitation" should be enforced as a database uniqueness constraint, or how
- * updates/history are represented at the schema level — that is not decided
- * here.
+ * DESIGN.md's current-state persistence model (Section 4/8, Resolved
+ * Decision) is now settled: each Invitation has exactly one current
+ * AttendanceOutcome row, enforced by UNIQUE(invitation_id) below. A
+ * capacity/promotion-driven change updates this row in place — RsvpService
+ * never inserts a second row for the same Invitation. This is current-state
+ * only, not history.
  *
  * Deliberately NOT represented here: capacity counters, waitlist position,
  * promotion timestamps, or any ordering/history field — all of that
- * requires capacity/waitlist logic and depends on unresolved questions
- * (Q1, Q7, Q13), none of which are decided in this slice.
+ * requires waitlist/promotion logic and depends on unresolved questions
+ * (Q7, Q13), not decided in this slice.
  */
 @Entity
-@Table(name = "attendance_outcomes")
+@Table(
+        name = "attendance_outcomes",
+        uniqueConstraints = @UniqueConstraint(name = "uk_attendance_outcome_invitation", columnNames = {"invitation_id"})
+)
 @Getter
 @Setter
 @NoArgsConstructor

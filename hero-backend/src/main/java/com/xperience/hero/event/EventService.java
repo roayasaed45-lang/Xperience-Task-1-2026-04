@@ -72,6 +72,17 @@ public class EventService {
                 .orElse(false);
     }
 
+    /**
+     * Acquires the per-event pessimistic lock used to serialize capacity
+     * decisions (DESIGN.md Section 10 First-Pass Concurrency Decision).
+     * Must be called from within an active transaction that also performs
+     * the capacity read and Attendance Outcome write it is meant to guard.
+     */
+    public void lockForCapacityDecision(Long eventId) {
+        eventRepository.lockForCapacityDecision(eventId)
+                .orElseThrow(() -> new EventNotFoundException(eventId));
+    }
+
     private void validate(CreateEventRequest request) {
         if (request.title() == null || request.title().isBlank()) {
             throw new IllegalArgumentException("Event title is required");

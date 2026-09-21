@@ -10,6 +10,7 @@ import com.xperience.hero.invitation.InvitationTokenService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
@@ -133,5 +134,23 @@ class AttendanceOutcomeRepositoryTest {
                 .build();
 
         assertThrows(Exception.class, () -> attendanceOutcomeRepository.saveAndFlush(attendanceOutcome));
+    }
+
+    @Test
+    void enforcesUniqueConstraintOnInvitation() {
+        Invitation invitation = createTestInvitation();
+
+        attendanceOutcomeRepository.saveAndFlush(AttendanceOutcome.builder()
+                .invitation(invitation)
+                .outcome(AttendanceOutcomeValue.CONFIRMED)
+                .build());
+
+        AttendanceOutcome secondRowSameInvitation = AttendanceOutcome.builder()
+                .invitation(invitation)
+                .outcome(AttendanceOutcomeValue.NONE)
+                .build();
+
+        assertThrows(DataIntegrityViolationException.class,
+                () -> attendanceOutcomeRepository.saveAndFlush(secondRowSameInvitation));
     }
 }
